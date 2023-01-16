@@ -18,8 +18,7 @@ func Lit(x Value) *LitExpr {
 }
 
 type VarExpr struct {
-	Name  string
-	Bound Expression
+	Name string
 }
 
 type ConsExpr struct {
@@ -49,29 +48,31 @@ func App(f Expression, x Expression) *AppExpr {
 type LetExpr struct {
 	Name string
 	Init Expression
-	Body Continuation
+	Body LetCont
 }
 
 func Let(name string, init Expression, body func(v *VarExpr) Expression) *LetExpr {
 	return &LetExpr{
 		Name: name,
 		Init: init,
-		Body: Continuationize(name, body),
+		Body: makeLetCont(name, body),
 	}
 }
 
-type CloneExpr struct {
-	X Expression
+type DupExpr struct {
+	NameA string
+	NameB string
+	Init  Expression
+	Body  DupCont
 }
 
-// Like most operations, clone consumes x its arguments, but you can still
-// use x for additional clones.
-func Clone(x Expression) *CloneExpr {
-	return &CloneExpr{X: x}
-}
-
-func Dup(x Expression) (x0, x1 Expression) {
-	return Clone(x), Clone(x)
+func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
+	return &DupExpr{
+		NameA: nameA,
+		NameB: nameB,
+		Init:  init,
+		Body:  makeDupCont(nameA, nameB, f),
+	}
 }
 
 type Op2Expr struct {
@@ -95,13 +96,13 @@ func Op2(op Operator, a, b Expression) *Op2Expr {
 
 type LamExpr struct {
 	Param string
-	Body  Continuation
+	Body  LamCont
 }
 
 func Lam(param string, body func(arg *VarExpr) Expression) *LamExpr {
 	return &LamExpr{
 		Param: param,
-		Body:  Continuationize(param, body),
+		Body:  makeLamCont(param, body),
 	}
 }
 
@@ -115,94 +116,139 @@ type Visitor interface {
 	VisitVar(*VarExpr)
 	VisitCons(*ConsExpr)
 	VisitLet(*LetExpr)
-	VisitClone(*CloneExpr)
+	VisitDup(*DupExpr)
 	VisitOp2(*Op2Expr)
 	VisitLam(*LamExpr)
 }
 
-func (x *LitExpr) Visit(v Visitor)   { v.VisitLit(x) }
-func (x *AppExpr) Visit(v Visitor)   { v.VisitApp(x) }
-func (x *VarExpr) Visit(v Visitor)   { v.VisitVar(x) }
-func (x *ConsExpr) Visit(v Visitor)  { v.VisitCons(x) }
-func (x *LetExpr) Visit(v Visitor)   { v.VisitLet(x) }
-func (x *CloneExpr) Visit(v Visitor) { v.VisitClone(x) }
-func (x *Op2Expr) Visit(v Visitor)   { v.VisitOp2(x) }
-func (x *LamExpr) Visit(v Visitor)   { v.VisitLam(x) }
+func (x *LitExpr) Visit(v Visitor)  { v.VisitLit(x) }
+func (x *AppExpr) Visit(v Visitor)  { v.VisitApp(x) }
+func (x *VarExpr) Visit(v Visitor)  { v.VisitVar(x) }
+func (x *ConsExpr) Visit(v Visitor) { v.VisitCons(x) }
+func (x *LetExpr) Visit(v Visitor)  { v.VisitLet(x) }
+func (x *DupExpr) Visit(v Visitor)  { v.VisitDup(x) }
+func (x *Op2Expr) Visit(v Visitor)  { v.VisitOp2(x) }
+func (x *LamExpr) Visit(v Visitor)  { v.VisitLam(x) }
 
-type Continuation struct {
+type LetCont struct {
 	X    *Expression
 	Hole *Expression
 }
 
-func (k Continuation) FillHole(x Expression) Expression {
+type LamCont = LetCont // Both are arity 1.
+
+type DupCont struct {
+	X     *Expression
+	HoleA *Expression
+	HoleB *Expression
+}
+
+func (k LetCont) FillHole(x Expression) Expression {
 	*k.Hole = x
 	return *k.X
 }
 
-func Continuationize(hole string, f func(*VarExpr) Expression) Continuation {
-	v := &VarExpr{
-		Name: hole,
-	}
+func (k DupCont) FillHoles(a Expression, b Expression) Expression {
+	*k.HoleA = a
+	*k.HoleB = b
+	return *k.X
+}
+
+func makeLetCont(hole string, f func(*VarExpr) Expression) LetCont {
+	v := &VarExpr{hole}
 	x := f(v)
-	c := &Continuationizer{
-		find: v,
+	c := &contBuilder{
+		holes: []holeBuilder{
+			{variable: v},
+		},
 	}
 	c.visitChild(&x)
-	_ = (*c.hole).(*VarExpr)
-	return Continuation{
+	_ = (*c.holes[0].location).(*VarExpr)
+	return LetCont{
 		X:    &x,
-		Hole: c.hole,
+		Hole: c.holes[0].location,
 	}
 }
 
-type Continuationizer struct {
-	find    *VarExpr    // Variable expression to find address of.
-	visited Expression  // Current expression in post-order traversal.
-	hole    *Expression // Address of found variable in expression.
+var makeLamCont = makeLetCont
+
+func makeDupCont(holeA, holeB string, f func(*VarExpr, *VarExpr) Expression) DupCont {
+	a := &VarExpr{holeA}
+	b := &VarExpr{holeB}
+	x := f(a, b)
+	c := &contBuilder{
+		holes: []holeBuilder{
+			{variable: a},
+			{variable: b},
+		},
+	}
+	c.visitChild(&x)
+	_ = (*c.holes[0].location).(*VarExpr)
+	_ = (*c.holes[1].location).(*VarExpr)
+	return DupCont{
+		X:     &x,
+		HoleA: c.holes[0].location,
+		HoleB: c.holes[0].location,
+	}
 }
 
-func (cb *Continuationizer) visitChild(x *Expression) {
+type contBuilder struct {
+	holes   []holeBuilder
+	visited Expression // Current expression in post-order traversal.
+}
+
+type holeBuilder struct {
+	variable *VarExpr    // Variable to find the address of.
+	location *Expression // Points to variable found in expression.
+}
+
+func (cb *contBuilder) visitChild(x *Expression) {
 	(*x).Visit(cb)
 	cb.visited = *x
-	if v, ok := cb.visited.(*VarExpr); ok && v == cb.find {
-		cb.hole = x
+	if v, ok := cb.visited.(*VarExpr); ok {
+		for i, hole := range cb.holes {
+			if v == hole.variable {
+				cb.holes[i].location = x
+			}
+		}
 	}
 }
 
-func (cb *Continuationizer) VisitLit(lit *LitExpr) {
+func (cb *contBuilder) VisitLit(lit *LitExpr) {
 	// No children.
 }
 
-func (cb *Continuationizer) VisitApp(app *AppExpr) {
+func (cb *contBuilder) VisitApp(app *AppExpr) {
 	cb.visitChild(&app.Func)
 	cb.visitChild(&app.Arg)
 }
 
-func (cb *Continuationizer) VisitVar(v *VarExpr) {
+func (cb *contBuilder) VisitVar(v *VarExpr) {
 	// No children.
 }
 
-func (cb *Continuationizer) VisitCons(cons *ConsExpr) {
+func (cb *contBuilder) VisitCons(cons *ConsExpr) {
 	for i := range cons.Body {
 		cb.visitChild(&cons.Body[i])
 	}
 }
 
-func (cb *Continuationizer) VisitLet(let *LetExpr) {
+func (cb *contBuilder) VisitLet(let *LetExpr) {
 	cb.visitChild(&let.Init)
 	cb.visitChild(let.Body.X)
 }
 
-func (cb *Continuationizer) VisitClone(clone *CloneExpr) {
-	cb.visitChild(&clone.X)
+func (cb *contBuilder) VisitDup(dup *DupExpr) {
+	cb.visitChild(&dup.Init)
+	cb.visitChild(dup.Body.X)
 }
 
-func (cb *Continuationizer) VisitOp2(op2 *Op2Expr) {
+func (cb *contBuilder) VisitOp2(op2 *Op2Expr) {
 	cb.visitChild(&op2.A)
 	cb.visitChild(&op2.B)
 }
 
-func (cb *Continuationizer) VisitLam(lam *LamExpr) {
+func (cb *contBuilder) VisitLam(lam *LamExpr) {
 	cb.visitChild(lam.Body.X)
 }
 
@@ -310,9 +356,17 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 	printer.printf(")")
 }
 
-func (printer *Printer) VisitClone(clone *CloneExpr) {
-	printer.printf("(clone ")
-	clone.X.Visit(printer)
+func (printer *Printer) VisitDup(dup *DupExpr) {
+	printer.printf("(dup ")
+	a := printer.fresh(dup.NameA, dup.Body.HoleA)
+	a.Visit(printer)
+	printer.printf(" ")
+	b := printer.fresh(dup.NameB, dup.Body.HoleB)
+	b.Visit(printer)
+	printer.printf(" ")
+	dup.Init.Visit(printer)
+	printer.printf(" ")
+	(*dup.Body.X).Visit(printer)
 	printer.printf(")")
 }
 
@@ -379,7 +433,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		return Lit(op2.Op.Func(a, b))
+		return Lit(op2.Op.Func(a.Value, b.Value))
 	})
 
 	// (Let x init body) => ...
@@ -391,35 +445,63 @@ func main() {
 		return let.Body.FillHole(let.Init)
 	})
 
-	// (Clone (Cons head body...))
+	// (Dup a b (Lit ...) k)
+	// ---------------------
+	// (k a b ...)
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		clone, ok := x.(*CloneExpr)
+		dup, ok := x.(*DupExpr)
 		if !ok {
 			return nil
 		}
-		cons, ok := clone.X.(*ConsExpr)
+		lit, ok := dup.Init.(*LitExpr)
 		if !ok {
 			return nil
 		}
-		clones := make([]Expression, len(cons.Body))
-		for i, child := range cons.Body {
-			clones[i] = Clone(child)
-		}
-		return Cons(cons.Head, clones...)
+		return dup.Body.FillHoles(lit, lit)
 	})
 
-	// (Clone (Lam param body))
+	// (Dup a b (Cons head body...) k)
+	// ----------------------------- Dup-Cons
+	// dup a0 a1 = a
+	// dup b0 b1 = b
+	// ...
+	// (k (Foo a0 b0 ...) (Foo a1 b1 ...))
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		clone, ok := x.(*CloneExpr)
+		dup, ok := x.(*DupExpr)
 		if !ok {
 			return nil
 		}
-		lam, ok := clone.X.(*LamExpr)
+		cons, ok := dup.Init.(*ConsExpr)
 		if !ok {
 			return nil
 		}
-		_ = lam
-		panic("TODO: implement clone-lam")
+		arity := len(cons.Body)
+		bodyA := make([]Expression, arity)
+		bodyB := make([]Expression, arity)
+		for i, child := range cons.Body {
+			Dup("a", "b", child, func(a, b *VarExpr) Expression {
+				bodyA[i] = a
+				bodyB[i] = b
+				return nil // XXX
+			})
+		}
+		consA := Cons(cons.Head, bodyA...)
+		consB := Cons(cons.Head, bodyB...)
+		return dup.Body.FillHoles(consA, consB)
+	})
+
+	// (Dup a b (Lam param body) k)
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		dup, ok := x.(*DupExpr)
+		if !ok {
+			return nil
+		}
+		lam, ok := dup.Init.(*LamExpr)
+		if !ok {
+			return nil
+		}
+		_ = lam    // XXX
+		return nil // XXX
 	})
 
 	// (Fst (Pair x y)) = x
@@ -458,10 +540,11 @@ func main() {
 		if !(ok && lst.Head == "Cons" && len(m.Body) == 2) {
 			return nil
 		}
-		f0, f1 := Dup(f)
-		first := lst.Body[0]
-		rest := lst.Body[1]
-		return Cons("Cons", first, App(f0, Cons("Map", f1, rest)))
+		return Dup("f0", "f1", f, func(f0, f1 *VarExpr) Expression {
+			first := lst.Body[0]
+			rest := lst.Body[1]
+			return Cons("Cons", first, App(f0, Cons("Map", f1, rest)))
+		})
 	})
 
 	sep := ""
@@ -485,6 +568,12 @@ func main() {
 	{
 		runMain(Let("x", Lit(1), func(x *VarExpr) Expression {
 			return x
+		}))
+	}
+
+	{
+		runMain(Dup("x", "y", Lit(1), func(x, y *VarExpr) Expression {
+			return Op2(Add, x, y)
 		}))
 	}
 
