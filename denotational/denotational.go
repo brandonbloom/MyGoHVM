@@ -269,11 +269,25 @@ type Machine struct {
 
 func (vm *Machine) Normalize(x *Expression) {
 	vm.Rewrite(x)
-	// TODO: Normalize within lets and lambdas too?
-	if cons, ok := (*x).(*ConsExpr); ok {
-		for i := range cons.Args {
-			vm.Normalize(&cons.Args[i])
+
+	switch x := (*x).(type) {
+	case *ConsExpr:
+		for i := range x.Args {
+			vm.Normalize(&x.Args[i])
 		}
+
+	case *DupExpr:
+		vm.Normalize(&x.Init)
+
+	case *Op2Expr:
+		vm.Normalize(&x.A)
+		vm.Normalize(&x.B)
+
+	case *VarExpr, *LitExpr, *SupExpr:
+		// No-op.
+
+	default:
+		panic(fmt.Errorf("cannot normalize %T", x))
 	}
 }
 
@@ -379,11 +393,11 @@ func (printer *Printer) VisitDup(dup *DupExpr) {
 }
 
 func (printer *Printer) VisitSup(sup *SupExpr) {
-	printer.printf("{")
+	printer.printf("#sup[")
 	sup.A.Visit(printer)
 	printer.printf(" ")
 	sup.B.Visit(printer)
-	printer.printf("}")
+	printer.printf("]")
 }
 
 func (printer *Printer) VisitLet(let *LetExpr) {
@@ -537,7 +551,7 @@ func main() {
 
 		var x0 Expression = &VarExpr{"x0"}
 		var x1 Expression = &VarExpr{"x1"}
-		sup := &SupExpr{x0, x1}
+		sup := Sup(x0, x1)
 		body := lam.Cont.FillHoles(sup)
 		var b0 Expression = &VarExpr{"b0"}
 		var b1 Expression = &VarExpr{"b1"}
@@ -570,6 +584,56 @@ func main() {
 			},
 		}
 	})
+
+	/*
+	  (+ {a0 a1} b)
+	  --------------------- Op2-Sup-A
+	  dup b0 b1 = b
+	  {(+ a0 b0) (+ a1 b1)}
+	*/
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		op2, ok := x.(*Op2Expr)
+		if !ok {
+			return nil
+		}
+		sup, ok := op2.A.(*SupExpr)
+		if !ok {
+			return nil
+		}
+		b := op2.B
+		op := op2.Op
+		a0 := sup.A
+		a1 := sup.B
+		return Dup("b0", "b1", b, func(b0, b1 *VarExpr) Expression {
+			return Sup(Op2(op, a0, b0), Op2(op, a1, b1))
+		})
+	})
+
+	/*
+		(+ a {b0 b1})
+		--------------------- Op2-Sup-B
+		dup a0 a1 = a
+		{(+ a0 b0) (+ a1 b1)}
+	*/
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		op2, ok := x.(*Op2Expr)
+		if !ok {
+			return nil
+		}
+		sup, ok := op2.B.(*SupExpr)
+		if !ok {
+			return nil
+		}
+		a := op2.A
+		op := op2.Op
+		b0 := sup.A
+		b1 := sup.B
+		return Dup("a0", "a1", a, func(a0, a1 *VarExpr) Expression {
+			return Sup(Op2(op, a0, b0), Op2(op, a1, b1))
+		})
+	})
+
+	/////////////
 
 	// (Fst (Pair x y)) = x
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
