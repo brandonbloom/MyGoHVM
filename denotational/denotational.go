@@ -676,8 +676,7 @@ func main() {
 		return lam.Cont.FillHoles(app.Arg)
 	})
 
-	// dup a b = {r s}
-	// --------------- Dup-Sup
+	// Dup-Sup.
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		dup, ok := x.(*DupExpr)
 		if !ok {
@@ -687,24 +686,34 @@ func main() {
 		if !ok {
 			return nil
 		}
-		if true { // XXX end of dup process?
+		if false { // XXX end of dup process?
 			/*
 				When ending the duplication process.
-				--------
+
+				dup a b = {r s}
+				-------- Dup-Sup (base)
 				a <- r
 				b <- s
 			*/
 			return dup.Cont.FillHoles(sup.A, sup.B)
 		} else {
 			/*
-				When duplicating a term, which itself duplicates something.
-				---------
-				x <- {xA xB}
-				y <- {yA yB}
-				dup xA yA = a
-				dup xB yB = b
+				  When duplicating a term, which itself duplicates something.
+
+					dup x y = {a b}
+					--------- Dup-Sup (recur)
+					x <- {xA xB}
+					y <- {yA yB}
+					dup xA yA = a
+					dup xB yB = b
 			*/
-			panic("TODO")
+			return Dup("xA", "yA", sup.A, func(xA, yA *VarExpr) Expression {
+				return Dup("xB", "yB", sup.B, func(xB, yB *VarExpr) Expression {
+					x := Sup(xA, xB)
+					y := Sup(yA, yB)
+					return dup.Cont.FillHoles(x, y)
+				})
+			})
 		}
 	})
 
