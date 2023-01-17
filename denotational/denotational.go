@@ -749,7 +749,7 @@ func main() {
 		return Dup("f0", "f1", f, func(f0, f1 *VarExpr) Expression {
 			first := lst.Args[0]
 			rest := lst.Args[1]
-			return Cons("Cons", first, App(f0, Cons("Map", f1, rest)))
+			return Cons("Cons", App(f0, first), Cons("Map", f1, rest))
 		})
 	})
 
