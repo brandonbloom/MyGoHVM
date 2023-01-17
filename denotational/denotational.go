@@ -267,38 +267,51 @@ type Machine struct {
 	rules []Rule
 }
 
-func (vm *Machine) Normalize(x *Expression) {
-	vm.Rewrite(x)
+func (vm *Machine) Normalize(x *Expression) (changed bool) {
+	loop := true
+	for loop {
+		loop = vm.Rewrite(x)
 
-	switch x := (*x).(type) {
-	case *ConsExpr:
-		for i := range x.Args {
-			vm.Normalize(&x.Args[i])
+		switch x := (*x).(type) {
+		case *ConsExpr:
+			for i := range x.Args {
+				loop = loop || vm.Normalize(&x.Args[i])
+			}
+
+		case *LetExpr:
+			for i := range x.Inits {
+				loop = loop || vm.Normalize(&x.Inits[i])
+			}
+			loop = loop || vm.Normalize(x.Cont.X)
+
+		case *DupExpr:
+			loop = loop || vm.Normalize(&x.Init)
+			loop = loop || vm.Normalize(x.Cont.X)
+
+		case *AppExpr:
+			loop = loop || vm.Normalize(&x.Func)
+			loop = loop || vm.Normalize(&x.Arg)
+
+		case *LamExpr:
+			loop = loop || vm.Normalize(x.Cont.X)
+
+		case *Op2Expr:
+			loop = loop || vm.Normalize(&x.A)
+			loop = loop || vm.Normalize(&x.B)
+
+		case *VarExpr, *LitExpr, *SupExpr:
+			// No-op.
+
+		default:
+			panic(fmt.Errorf("cannot normalize %T", x))
 		}
 
-	case *DupExpr:
-		vm.Normalize(&x.Init)
-
-	case *AppExpr:
-		vm.Normalize(&x.Func)
-		vm.Normalize(&x.Arg)
-
-	case *LamExpr:
-		vm.Normalize(x.Cont.X)
-
-	case *Op2Expr:
-		vm.Normalize(&x.A)
-		vm.Normalize(&x.B)
-
-	case *VarExpr, *LitExpr, *SupExpr:
-		// No-op.
-
-	default:
-		panic(fmt.Errorf("cannot normalize %T", x))
+		changed = changed || loop
 	}
+	return
 }
 
-func (vm *Machine) Rewrite(x *Expression) {
+func (vm *Machine) Rewrite(x *Expression) (changed bool) {
 	limit := -1
 rewrite:
 	for fuel := limit; fuel != 0; fuel-- {
@@ -306,6 +319,7 @@ rewrite:
 			y := rule(vm, *x)
 			if y != nil {
 				*x = y
+				changed = true
 				continue rewrite
 			}
 		}
@@ -464,6 +478,10 @@ func addressOf[T any](x T) *T {
 
 func main() {
 	vm := &Machine{}
+
+	// TODO: Avoid runtime pattern matching on builtins.
+	// Do this by encoding builtin rules as expressions with eval method.
+	// Move the matching into the factory functions.
 
 	// (Op2 f a b) = ...
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
@@ -658,6 +676,38 @@ func main() {
 		return lam.Cont.FillHoles(app.Arg)
 	})
 
+	// dup a b = {r s}
+	// --------------- Dup-Sup
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		dup, ok := x.(*DupExpr)
+		if !ok {
+			return nil
+		}
+		sup, ok := dup.Init.(*SupExpr)
+		if !ok {
+			return nil
+		}
+		if true { // XXX end of dup process?
+			/*
+				When ending the duplication process.
+				--------
+				a <- r
+				b <- s
+			*/
+			return dup.Cont.FillHoles(sup.A, sup.B)
+		} else {
+			/*
+				When duplicating a term, which itself duplicates something.
+				---------
+				x <- {xA xB}
+				y <- {yA yB}
+				dup xA yA = a
+				dup xB yB = b
+			*/
+			panic("TODO")
+		}
+	})
+
 	/////////////
 
 	// (Fst (Pair x y)) = x
@@ -710,7 +760,7 @@ func main() {
 		fmt.Print("Input:\n\n")
 		DumpExpression(x)
 		fmt.Print("\n")
-		vm.Normalize(&x)
+		_ = vm.Normalize(&x)
 		fmt.Printf("Output:\n\n")
 		DumpExpression(x)
 	}
