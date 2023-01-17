@@ -22,14 +22,14 @@ type VarExpr struct {
 }
 
 type ConsExpr struct {
-	Head string
-	Body []Expression
+	Ctor string
+	Args []Expression
 }
 
-func Cons(head string, body ...Expression) *ConsExpr {
+func Cons(ctor string, args ...Expression) *ConsExpr {
 	return &ConsExpr{
-		Head: head,
-		Body: body,
+		Ctor: ctor,
+		Args: args,
 	}
 }
 
@@ -48,14 +48,14 @@ func App(f Expression, x Expression) *AppExpr {
 type LetExpr struct {
 	Name string
 	Init Expression
-	Body LetCont
+	Cont LetCont
 }
 
 func Let(name string, init Expression, body func(v *VarExpr) Expression) *LetExpr {
 	return &LetExpr{
 		Name: name,
 		Init: init,
-		Body: makeLetCont(name, body),
+		Cont: makeLetCont(name, body),
 	}
 }
 
@@ -63,7 +63,7 @@ type DupExpr struct {
 	NameA string
 	NameB string
 	Init  Expression
-	Body  DupCont
+	Cont  DupCont
 }
 
 func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
@@ -71,8 +71,17 @@ func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expres
 		NameA: nameA,
 		NameB: nameB,
 		Init:  init,
-		Body:  makeDupCont(nameA, nameB, f),
+		Cont:  makeDupCont(nameA, nameB, f),
 	}
+}
+
+type SupExpr struct {
+	A Expression
+	B Expression
+}
+
+func Sup(a, b Expression) *SupExpr {
+	return &SupExpr{a, b}
 }
 
 type Op2Expr struct {
@@ -96,13 +105,13 @@ func Op2(op Operator, a, b Expression) *Op2Expr {
 
 type LamExpr struct {
 	Param string
-	Body  LamCont
+	Cont  LamCont
 }
 
 func Lam(param string, body func(arg *VarExpr) Expression) *LamExpr {
 	return &LamExpr{
 		Param: param,
-		Body:  makeLamCont(param, body),
+		Cont:  makeLamCont(param, body),
 	}
 }
 
@@ -117,6 +126,7 @@ type Visitor interface {
 	VisitCons(*ConsExpr)
 	VisitLet(*LetExpr)
 	VisitDup(*DupExpr)
+	VisitSup(*SupExpr)
 	VisitOp2(*Op2Expr)
 	VisitLam(*LamExpr)
 }
@@ -127,6 +137,7 @@ func (x *VarExpr) Visit(v Visitor)  { v.VisitVar(x) }
 func (x *ConsExpr) Visit(v Visitor) { v.VisitCons(x) }
 func (x *LetExpr) Visit(v Visitor)  { v.VisitLet(x) }
 func (x *DupExpr) Visit(v Visitor)  { v.VisitDup(x) }
+func (x *SupExpr) Visit(v Visitor)  { v.VisitSup(x) }
 func (x *Op2Expr) Visit(v Visitor)  { v.VisitOp2(x) }
 func (x *LamExpr) Visit(v Visitor)  { v.VisitLam(x) }
 
@@ -162,6 +173,8 @@ func makeLetCont(hole string, f func(*VarExpr) Expression) LetCont {
 			{variable: v},
 		},
 	}
+	fmt.Printf("lam cont (%s) from expr:\n", v.Name)
+	DumpExpression(x)
 	c.visitChild(&x)
 	_ = (*c.holes[0].location).(*VarExpr)
 	return LetCont{
@@ -188,7 +201,7 @@ func makeDupCont(holeA, holeB string, f func(*VarExpr, *VarExpr) Expression) Dup
 	return DupCont{
 		X:     &x,
 		HoleA: c.holes[0].location,
-		HoleB: c.holes[0].location,
+		HoleB: c.holes[1].location,
 	}
 }
 
@@ -207,7 +220,7 @@ func (cb *contBuilder) visitChild(x *Expression) {
 	cb.visited = *x
 	if v, ok := cb.visited.(*VarExpr); ok {
 		for i, hole := range cb.holes {
-			if v == hole.variable {
+			if hole.variable == v {
 				cb.holes[i].location = x
 			}
 		}
@@ -228,19 +241,24 @@ func (cb *contBuilder) VisitVar(v *VarExpr) {
 }
 
 func (cb *contBuilder) VisitCons(cons *ConsExpr) {
-	for i := range cons.Body {
-		cb.visitChild(&cons.Body[i])
+	for i := range cons.Args {
+		cb.visitChild(&cons.Args[i])
 	}
 }
 
 func (cb *contBuilder) VisitLet(let *LetExpr) {
 	cb.visitChild(&let.Init)
-	cb.visitChild(let.Body.X)
+	cb.visitChild(let.Cont.X)
 }
 
 func (cb *contBuilder) VisitDup(dup *DupExpr) {
 	cb.visitChild(&dup.Init)
-	cb.visitChild(dup.Body.X)
+	cb.visitChild(dup.Cont.X)
+}
+
+func (cb *contBuilder) VisitSup(sup *SupExpr) {
+	cb.visitChild(&sup.A)
+	cb.visitChild(&sup.B)
 }
 
 func (cb *contBuilder) VisitOp2(op2 *Op2Expr) {
@@ -249,7 +267,7 @@ func (cb *contBuilder) VisitOp2(op2 *Op2Expr) {
 }
 
 func (cb *contBuilder) VisitLam(lam *LamExpr) {
-	cb.visitChild(lam.Body.X)
+	cb.visitChild(lam.Cont.X)
 }
 
 // Returns nil if the rule does not match.
@@ -263,8 +281,8 @@ func (vm *Machine) Normalize(x *Expression) {
 	vm.Rewrite(x)
 	// TODO: Normalize within lets and lambdas too?
 	if cons, ok := (*x).(*ConsExpr); ok {
-		for i := range cons.Body {
-			vm.Normalize(&cons.Body[i])
+		for i := range cons.Args {
+			vm.Normalize(&cons.Args[i])
 		}
 	}
 }
@@ -335,12 +353,12 @@ func (printer *Printer) VisitVar(v *VarExpr) {
 }
 
 func (printer *Printer) VisitCons(cons *ConsExpr) {
-	if len(cons.Body) == 0 {
-		printer.printf("%s", cons.Head)
+	if len(cons.Args) == 0 {
+		printer.printf("%s", cons.Ctor)
 	} else {
 		printer.printf("(")
-		printer.printf("%s", cons.Head)
-		for _, arg := range cons.Body {
+		printer.printf("%s", cons.Ctor)
+		for _, arg := range cons.Args {
 			printer.printf(" ")
 			arg.Visit(printer)
 		}
@@ -358,26 +376,34 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
 	printer.printf("(dup ")
-	a := printer.fresh(dup.NameA, dup.Body.HoleA)
+	a := printer.fresh(dup.NameA, dup.Cont.HoleA)
 	a.Visit(printer)
 	printer.printf(" ")
-	b := printer.fresh(dup.NameB, dup.Body.HoleB)
+	b := printer.fresh(dup.NameB, dup.Cont.HoleB)
 	b.Visit(printer)
 	printer.printf(" ")
 	dup.Init.Visit(printer)
 	printer.printf(" ")
-	(*dup.Body.X).Visit(printer)
+	(*dup.Cont.X).Visit(printer)
 	printer.printf(")")
+}
+
+func (printer *Printer) VisitSup(sup *SupExpr) {
+	printer.printf("{")
+	sup.A.Visit(printer)
+	printer.printf(" ")
+	sup.B.Visit(printer)
+	printer.printf("}")
 }
 
 func (printer *Printer) VisitLet(let *LetExpr) {
 	printer.printf("(let ")
-	v := printer.fresh(let.Name, let.Body.Hole)
+	v := printer.fresh(let.Name, let.Cont.Hole)
 	v.Visit(printer)
 	printer.printf(" ")
 	let.Init.Visit(printer)
 	printer.printf(" ")
-	(*let.Body.X).Visit(printer)
+	(*let.Cont.X).Visit(printer)
 	printer.printf(")")
 }
 
@@ -394,10 +420,10 @@ func (printer *Printer) VisitLit(lit *LitExpr) {
 
 func (printer *Printer) VisitLam(lam *LamExpr) {
 	printer.printf("(lam ")
-	v := printer.fresh(lam.Param, lam.Body.Hole)
+	v := printer.fresh(lam.Param, lam.Cont.Hole)
 	v.Visit(printer)
 	printer.printf(" ")
-	(*lam.Body.X).Visit(printer)
+	(*lam.Cont.X).Visit(printer)
 	printer.printf(")")
 }
 
@@ -442,7 +468,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		return let.Body.FillHole(let.Init)
+		return let.Cont.FillHole(let.Init)
 	})
 
 	// (Dup a b (Lit ...) k)
@@ -457,10 +483,10 @@ func main() {
 		if !ok {
 			return nil
 		}
-		return dup.Body.FillHoles(lit, lit)
+		return dup.Cont.FillHoles(lit, lit)
 	})
 
-	// (Dup a b (Cons head body...) k)
+	// (Dup a b (Cons ctor args...) k)
 	// ----------------------------- Dup-Cons
 	// dup a0 a1 = a
 	// dup b0 b1 = b
@@ -475,22 +501,31 @@ func main() {
 		if !ok {
 			return nil
 		}
-		arity := len(cons.Body)
-		bodyA := make([]Expression, arity)
-		bodyB := make([]Expression, arity)
-		for i, child := range cons.Body {
+		arity := len(cons.Args)
+		argsA := make([]Expression, arity)
+		argsB := make([]Expression, arity)
+		for i, child := range cons.Args {
 			Dup("a", "b", child, func(a, b *VarExpr) Expression {
-				bodyA[i] = a
-				bodyB[i] = b
+				argsA[i] = a
+				argsB[i] = b
 				return nil // XXX
 			})
 		}
-		consA := Cons(cons.Head, bodyA...)
-		consB := Cons(cons.Head, bodyB...)
-		return dup.Body.FillHoles(consA, consB)
+		consA := Cons(cons.Ctor, argsA...)
+		consB := Cons(cons.Ctor, argsB...)
+		return dup.Cont.FillHoles(consA, consB)
 	})
 
-	// (Dup a b (Lam param body) k)
+	/*
+		(Dup a b (Lam param body) k)
+
+		dup a b = λx(body)
+		------------------ Dup-Lam
+		a <- λx0(b0)
+		b <- λx1(b1)
+		x <- {x0 x1}
+		dup b0 b1 = body
+	*/
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		dup, ok := x.(*DupExpr)
 		if !ok {
@@ -500,31 +535,56 @@ func main() {
 		if !ok {
 			return nil
 		}
-		_ = lam    // XXX
-		return nil // XXX
+
+		var x0 Expression = &VarExpr{Name: "x0"}
+		var x1 Expression = &VarExpr{Name: "x1"}
+		body := lam.Cont.FillHole(&SupExpr{
+			A: x0,
+			B: x1,
+		})
+		lamA := &LamExpr{
+			Param: "x0",
+			Cont: LamCont{
+				Hole: &x0,
+			},
+		}
+		lamB := &LamExpr{
+			Param: "x1",
+			Cont: LamCont{
+				Hole: &x1,
+			},
+		}
+		Dup("b0", "b1", body, func(b0, b1 *VarExpr) Expression {
+			var k0 Expression = b0
+			var k1 Expression = b1
+			lamA.Cont.X = &k0
+			lamB.Cont.X = &k1
+			return nil
+		})
+		return dup.Cont.FillHoles(lamA, lamB)
 	})
 
 	// (Fst (Pair x y)) = x
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		f, ok := x.(*ConsExpr)
-		if !(ok && f.Head == "Fst" && len(f.Body) == 1) {
+		if !(ok && f.Ctor == "Fst" && len(f.Args) == 1) {
 			return nil
 		}
-		pair, ok := f.Body[0].(*ConsExpr)
-		if !(ok && len(pair.Body) == 2) {
+		pair, ok := f.Args[0].(*ConsExpr)
+		if !(ok && len(pair.Args) == 2) {
 			return nil
 		}
-		return pair.Body[0]
+		return pair.Args[0]
 	})
 
 	// (Map f Nil) = Nil
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		m, ok := x.(*ConsExpr)
-		if !(ok && m.Head == "Map" && len(m.Body) == 2) {
+		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
 			return nil
 		}
 		n, ok := x.(*ConsExpr)
-		if !(ok && n.Head == "Nil" && len(m.Body) == 0) {
+		if !(ok && n.Ctor == "Nil" && len(m.Args) == 0) {
 			return nil
 		}
 		return n
@@ -532,17 +592,17 @@ func main() {
 	// (Map f (Cons x xs)) = (Cons (f x) (Map f xs))
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		m, ok := x.(*ConsExpr)
-		if !(ok && m.Head == "Map" && len(m.Body) == 2) {
+		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
 			return nil
 		}
-		f := m.Body[0]
-		lst, ok := m.Body[1].(*ConsExpr)
-		if !(ok && lst.Head == "Cons" && len(m.Body) == 2) {
+		f := m.Args[0]
+		lst, ok := m.Args[1].(*ConsExpr)
+		if !(ok && lst.Ctor == "Cons" && len(m.Args) == 2) {
 			return nil
 		}
 		return Dup("f0", "f1", f, func(f0, f1 *VarExpr) Expression {
-			first := lst.Body[0]
-			rest := lst.Body[1]
+			first := lst.Args[0]
+			rest := lst.Args[1]
 			return Cons("Cons", first, App(f0, Cons("Map", f1, rest)))
 		})
 	})
