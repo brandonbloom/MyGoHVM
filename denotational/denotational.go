@@ -279,6 +279,13 @@ func (vm *Machine) Normalize(x *Expression) {
 	case *DupExpr:
 		vm.Normalize(&x.Init)
 
+	case *AppExpr:
+		vm.Normalize(&x.Func)
+		vm.Normalize(&x.Arg)
+
+	case *LamExpr:
+		vm.Normalize(x.Cont.X)
+
 	case *Op2Expr:
 		vm.Normalize(&x.A)
 		vm.Normalize(&x.B)
@@ -633,6 +640,24 @@ func main() {
 		})
 	})
 
+	/*
+		(λx(body) arg)
+		-------------- App-Lam
+		x <- arg
+		body
+	*/
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		app, ok := x.(*AppExpr)
+		if !ok {
+			return nil
+		}
+		lam, ok := app.Func.(*LamExpr)
+		if !ok {
+			return nil
+		}
+		return lam.Cont.FillHoles(app.Arg)
+	})
+
 	/////////////
 
 	// (Fst (Pair x y)) = x
@@ -706,6 +731,13 @@ func main() {
 		runMain(Dup("x", "y", Lit(1), func(x, y *VarExpr) Expression {
 			return Op2(Add, x, y)
 		}))
+	}
+
+	{
+		runMain(App(
+			Lam("x", func(x *VarExpr) Expression { return x }),
+			Lit(1),
+		))
 	}
 
 	{
