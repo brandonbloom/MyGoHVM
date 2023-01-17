@@ -46,24 +46,25 @@ func App(f Expression, x Expression) *AppExpr {
 }
 
 type LetExpr struct {
-	Name string
-	Init Expression
-	Cont LetCont
+	Names []string
+	Inits []Expression
+	Cont  Continuation
 }
 
 func Let(name string, init Expression, body func(v *VarExpr) Expression) *LetExpr {
 	return &LetExpr{
-		Name: name,
-		Init: init,
-		Cont: makeLetCont(name, body),
+		Names: []string{name},
+		Inits: []Expression{init},
+		Cont:  makeLetCont(name, body),
 	}
 }
 
+// TODO: Variadic.
 type DupExpr struct {
 	NameA string
 	NameB string
 	Init  Expression
-	Cont  DupCont
+	Cont  Continuation
 }
 
 func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
@@ -103,9 +104,10 @@ func Op2(op Operator, a, b Expression) *Op2Expr {
 	}
 }
 
+// TODO: Variadic.
 type LamExpr struct {
 	Param string
-	Cont  LamCont
+	Cont  Continuation
 }
 
 func Lam(param string, body func(arg *VarExpr) Expression) *LamExpr {
@@ -141,87 +143,73 @@ func (x *SupExpr) Visit(v Visitor)  { v.VisitSup(x) }
 func (x *Op2Expr) Visit(v Visitor)  { v.VisitOp2(x) }
 func (x *LamExpr) Visit(v Visitor)  { v.VisitLam(x) }
 
-type LetCont struct {
-	X    *Expression
-	Hole *Expression
-}
-
-type LamCont = LetCont // Both are arity 1.
-
-type DupCont struct {
+type Continuation struct {
 	X     *Expression
-	HoleA *Expression
-	HoleB *Expression
+	Holes []*Expression
 }
 
-func (k LetCont) FillHole(x Expression) Expression {
-	*k.Hole = x
+func (k Continuation) FillHoles(xs ...Expression) Expression {
+	for i, x := range xs {
+		*k.Holes[i] = x
+	}
 	return *k.X
 }
 
-func (k DupCont) FillHoles(a Expression, b Expression) Expression {
-	*k.HoleA = a
-	*k.HoleB = b
-	return *k.X
-}
-
-func makeLetCont(hole string, f func(*VarExpr) Expression) LetCont {
-	v := &VarExpr{hole}
-	x := f(v)
-	c := &contBuilder{
-		holes: []holeBuilder{
-			{variable: v},
-		},
+func makeCont(holes []string, f func(...*VarExpr) Expression) Continuation {
+	vars := make([]*VarExpr, len(holes))
+	for i, hole := range holes {
+		vars[i] = &VarExpr{hole}
 	}
-	fmt.Printf("lam cont (%s) from expr:\n", v.Name)
-	DumpExpression(x)
-	c.visitChild(&x)
-	_ = (*c.holes[0].location).(*VarExpr)
-	return LetCont{
-		X:    &x,
-		Hole: c.holes[0].location,
+	x := f(vars...)
+	cb := newContBuilder(vars...)
+	cb.visitChild(&x)
+	for _, hole := range cb.holes {
+		_ = (*hole).(*VarExpr)
 	}
-}
-
-var makeLamCont = makeLetCont
-
-func makeDupCont(holeA, holeB string, f func(*VarExpr, *VarExpr) Expression) DupCont {
-	a := &VarExpr{holeA}
-	b := &VarExpr{holeB}
-	x := f(a, b)
-	c := &contBuilder{
-		holes: []holeBuilder{
-			{variable: a},
-			{variable: b},
-		},
-	}
-	c.visitChild(&x)
-	_ = (*c.holes[0].location).(*VarExpr)
-	_ = (*c.holes[1].location).(*VarExpr)
-	return DupCont{
+	return Continuation{
 		X:     &x,
-		HoleA: c.holes[0].location,
-		HoleB: c.holes[1].location,
+		Holes: cb.holes,
 	}
+}
+
+func makeLetCont(hole string, f func(*VarExpr) Expression) Continuation {
+	return makeCont([]string{hole}, func(vars ...*VarExpr) Expression {
+		return f(vars[0])
+	})
+}
+
+func makeLamCont(hole string, f func(*VarExpr) Expression) Continuation {
+	return makeCont([]string{hole}, func(vars ...*VarExpr) Expression {
+		return f(vars[0])
+	})
+}
+
+func makeDupCont(holeA, holeB string, f func(*VarExpr, *VarExpr) Expression) Continuation {
+	return makeCont([]string{holeA, holeB}, func(vars ...*VarExpr) Expression {
+		return f(vars[0], vars[1])
+	})
 }
 
 type contBuilder struct {
-	holes   []holeBuilder
-	visited Expression // Current expression in post-order traversal.
+	variables []*VarExpr    // Variables to find the addresses of.
+	holes     []*Expression // Found addresses of parallel found variables.
+	visited   Expression    // Current expression in post-order traversal.
 }
 
-type holeBuilder struct {
-	variable *VarExpr    // Variable to find the address of.
-	location *Expression // Points to variable found in expression.
+func newContBuilder(variables ...*VarExpr) *contBuilder {
+	return &contBuilder{
+		variables: variables,
+		holes:     make([]*Expression, len(variables)),
+	}
 }
 
 func (cb *contBuilder) visitChild(x *Expression) {
 	(*x).Visit(cb)
 	cb.visited = *x
 	if v, ok := cb.visited.(*VarExpr); ok {
-		for i, hole := range cb.holes {
-			if hole.variable == v {
-				cb.holes[i].location = x
+		for i, candidate := range cb.variables {
+			if candidate == v {
+				cb.holes[i] = x
 			}
 		}
 	}
@@ -247,7 +235,9 @@ func (cb *contBuilder) VisitCons(cons *ConsExpr) {
 }
 
 func (cb *contBuilder) VisitLet(let *LetExpr) {
-	cb.visitChild(&let.Init)
+	for i := range let.Inits {
+		cb.visitChild(&let.Inits[i])
+	}
 	cb.visitChild(let.Cont.X)
 }
 
@@ -376,10 +366,10 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
 	printer.printf("(dup ")
-	a := printer.fresh(dup.NameA, dup.Cont.HoleA)
+	a := printer.fresh(dup.NameA, dup.Cont.Holes[0])
 	a.Visit(printer)
 	printer.printf(" ")
-	b := printer.fresh(dup.NameB, dup.Cont.HoleB)
+	b := printer.fresh(dup.NameB, dup.Cont.Holes[1])
 	b.Visit(printer)
 	printer.printf(" ")
 	dup.Init.Visit(printer)
@@ -397,12 +387,17 @@ func (printer *Printer) VisitSup(sup *SupExpr) {
 }
 
 func (printer *Printer) VisitLet(let *LetExpr) {
-	printer.printf("(let ")
-	v := printer.fresh(let.Name, let.Cont.Hole)
-	v.Visit(printer)
-	printer.printf(" ")
-	let.Init.Visit(printer)
-	printer.printf(" ")
+	printer.printf("(let {")
+	sep := ""
+	for i := range let.Names {
+		printer.printf(sep)
+		v := printer.fresh(let.Names[i], let.Cont.Holes[i])
+		v.Visit(printer)
+		printer.printf(" ")
+		let.Inits[i].Visit(printer)
+		sep = ", "
+	}
+	printer.printf("} ")
 	(*let.Cont.X).Visit(printer)
 	printer.printf(")")
 }
@@ -420,7 +415,7 @@ func (printer *Printer) VisitLit(lit *LitExpr) {
 
 func (printer *Printer) VisitLam(lam *LamExpr) {
 	printer.printf("(lam ")
-	v := printer.fresh(lam.Param, lam.Cont.Hole)
+	v := printer.fresh(lam.Param, lam.Cont.Holes[0])
 	v.Visit(printer)
 	printer.printf(" ")
 	(*lam.Cont.X).Visit(printer)
@@ -440,6 +435,10 @@ var Add = Operator{
 	Func: func(a, b Value) Value {
 		return a.(int) + b.(int)
 	},
+}
+
+func addressOf[T any](x T) *T {
+	return &x
 }
 
 func main() {
@@ -462,13 +461,13 @@ func main() {
 		return Lit(op2.Op.Func(a.Value, b.Value))
 	})
 
-	// (Let x init body) => ...
+	// (Let {x init, ...} body) => ...
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		let, ok := x.(*LetExpr)
 		if !ok {
 			return nil
 		}
-		return let.Cont.FillHole(let.Init)
+		return let.Cont.FillHoles(let.Inits...)
 	})
 
 	// (Dup a b (Lit ...) k)
@@ -536,32 +535,40 @@ func main() {
 			return nil
 		}
 
-		var x0 Expression = &VarExpr{Name: "x0"}
-		var x1 Expression = &VarExpr{Name: "x1"}
-		body := lam.Cont.FillHole(&SupExpr{
-			A: x0,
-			B: x1,
-		})
-		lamA := &LamExpr{
-			Param: "x0",
-			Cont: LamCont{
-				Hole: &x0,
+		var x0 Expression = &VarExpr{"x0"}
+		var x1 Expression = &VarExpr{"x1"}
+		sup := &SupExpr{x0, x1}
+		body := lam.Cont.FillHoles(sup)
+		var b0 Expression = &VarExpr{"b0"}
+		var b1 Expression = &VarExpr{"b1"}
+		return &DupExpr{
+			NameA: "b0",
+			NameB: "b1",
+			Init:  body,
+			Cont: Continuation{
+				X: addressOf[Expression](&LetExpr{
+					Names: []string{"a", "b"},
+					Inits: []Expression{
+						&LamExpr{
+							Param: "x0",
+							Cont: Continuation{
+								X:     &b0,
+								Holes: []*Expression{&sup.A},
+							},
+						},
+						&LamExpr{
+							Param: "x1",
+							Cont: Continuation{
+								X:     &b1,
+								Holes: []*Expression{&sup.B},
+							},
+						},
+					},
+					Cont: dup.Cont,
+				}),
+				Holes: []*Expression{&b0, &b1},
 			},
 		}
-		lamB := &LamExpr{
-			Param: "x1",
-			Cont: LamCont{
-				Hole: &x1,
-			},
-		}
-		Dup("b0", "b1", body, func(b0, b1 *VarExpr) Expression {
-			var k0 Expression = b0
-			var k1 Expression = b1
-			lamA.Cont.X = &k0
-			lamB.Cont.X = &k1
-			return nil
-		})
-		return dup.Cont.FillHoles(lamA, lamB)
 	})
 
 	// (Fst (Pair x y)) = x
