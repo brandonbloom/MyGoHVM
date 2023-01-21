@@ -952,11 +952,22 @@ func main() {
 	}
 
 	{
+		// Dup lambdas, but don't apply them.
 		dupLabel := vm.FreshDupLabel()
 		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
 			return Op2(Add, x, Lit(1))
 		}), func(f1, f2 *VarExpr) Expression {
 			return Cons("Pair", f1, f2)
+		}))
+	}
+
+	{
+		// Dup and apply lambdas that ignore the argument.
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
+			return Erase(x, Lit(1))
+		}), func(f1, f2 *VarExpr) Expression {
+			return Cons("Pair", App(f1, Lit(2)), App(f2, Lit(3)))
 		}))
 	}
 
