@@ -586,7 +586,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		b, ok := op2.A.(*LitExpr)
+		b, ok := op2.B.(*LitExpr)
 		if !ok {
 			return nil
 		}
@@ -909,6 +909,10 @@ func main() {
 		runMain(Let1("x", Lit(1), func(x *VarExpr) Expression {
 			return x
 		}))
+	}
+
+	{
+		runMain(Op2(Add, Lit(2), Lit(3)))
 	}
 
 	{
