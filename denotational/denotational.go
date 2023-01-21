@@ -746,10 +746,10 @@ func main() {
 
 	/////////////
 
-	// (Fst (Pair x y)) = x
+	// (Left (Pair x y)) = x
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		f, ok := x.(*ConsExpr)
-		if !(ok && f.Ctor == "Fst" && len(f.Args) == 1) {
+		if !(ok && f.Ctor == "Left" && len(f.Args) == 1) {
 			return nil
 		}
 		pair, ok := f.Args[0].(*ConsExpr)
@@ -757,6 +757,19 @@ func main() {
 			return nil
 		}
 		return pair.Args[0]
+	})
+
+	// (Right (Pair x y)) = y
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		f, ok := x.(*ConsExpr)
+		if !(ok && f.Ctor == "Right" && len(f.Args) == 1) {
+			return nil
+		}
+		pair, ok := f.Args[0].(*ConsExpr)
+		if !(ok && len(pair.Args) == 2) {
+			return nil
+		}
+		return pair.Args[1]
 	})
 
 	// (Map f Nil) = Nil
@@ -805,7 +818,7 @@ func main() {
 	{
 		x := vm.FreshVar("x")
 		y := vm.FreshVar("y")
-		runMain(Cons("Fst", Cons("Pair", x, y)))
+		runMain(Cons("Left", Cons("Pair", x, y)))
 	}
 
 	{
@@ -826,6 +839,17 @@ func main() {
 			Lam("x", func(x *VarExpr) Expression { return x }),
 			Lit(1),
 		))
+	}
+
+	{
+		runMain(Cons("Pair", Lit(1), Lit(2)))
+	}
+
+	{
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "a", "b", Cons("Pair", Lit(1), Lit(2)), func(x, y *VarExpr) Expression {
+			return Cons("Quad", Cons("Left", x), Cons("Right", x), Cons("Left", y), Cons("Right", y))
+		}))
 	}
 
 	{
