@@ -81,7 +81,7 @@ func Let1(name string, init Expression, body func(v *VarExpr) Expression) *LetEx
 	})
 }
 
-// TODO: Variadic.
+// TODO: Variadic. type DupBinding { Name string; Count int; Init Expression }
 type DupExpr struct {
 	Label int64
 	NameA string
@@ -288,6 +288,8 @@ func (cb *contBuilder) VisitLam(lam *LamExpr) {
 type Rule func(*Machine, Expression) Expression
 
 type Machine struct {
+	Trace bool
+
 	dupCount int64
 	rules    []Rule
 }
@@ -300,6 +302,10 @@ func (vm *Machine) FreshDupLabel() int64 {
 func (vm *Machine) Normalize(x *Expression) (changed bool) {
 	loop := true
 	for loop {
+		if vm.Trace {
+			fmt.Println("Normalizing:")
+			DumpExpression(*x)
+		}
 		loop = vm.Rewrite(x)
 
 		switch x := (*x).(type) {
@@ -338,11 +344,19 @@ func (vm *Machine) Normalize(x *Expression) (changed bool) {
 
 		changed = changed || loop
 	}
+	if vm.Trace {
+		fmt.Println("Normalized:")
+		DumpExpression(*x)
+	}
 	return
 }
 
 func (vm *Machine) Rewrite(x *Expression) (changed bool) {
 	limit := -1
+	if vm.Trace {
+		fmt.Println("Rewriting:")
+		DumpExpression(*x)
+	}
 rewrite:
 	for fuel := limit; fuel != 0; fuel-- {
 		for _, rule := range vm.rules {
@@ -350,6 +364,10 @@ rewrite:
 			if y != nil {
 				*x = y
 				changed = true
+				if vm.Trace {
+					fmt.Println("Rewriten:")
+					DumpExpression(*x)
+				}
 				continue rewrite
 			}
 		}
@@ -388,7 +406,10 @@ func DumpExpression(x Expression) {
 }
 
 func (printer *Printer) freshVar(name string, x *Expression) *VarExpr {
-	v := (*x).(*VarExpr)
+	v, ok := (*x).(*VarExpr)
+	if !ok {
+		panic(fmt.Errorf("got nil, expected variable: %s", name))
+	}
 	id := printer.counter
 	printer.counter++
 	printer.varIDs[v] = id
@@ -572,16 +593,34 @@ func main() {
 		arity := len(cons.Args)
 		argsA := make([]Expression, arity)
 		argsB := make([]Expression, arity)
-		for i, child := range cons.Args {
-			Dup(dup.Label, "a", "b", child, func(a, b *VarExpr) Expression {
-				argsA[i] = a
-				argsB[i] = b
-				return nil // XXX
-			})
+		exprs := make([]Expression, arity+1)
+		res := &LetExpr{
+			Names: []string{"consA", "consB"},
+			Cont:  dup.Cont,
 		}
-		consA := Cons(cons.Ctor, argsA...)
-		consB := Cons(cons.Ctor, argsB...)
-		return dup.Cont.FillHoles(consA, consB)
+		exprs[arity] = res
+		for i, child := range cons.Args {
+			argsA[i] = &VarExpr{Name: "argA"}
+			argsB[i] = &VarExpr{Name: "argB"}
+			exprs[i] = &DupExpr{
+				Label: dup.Label,
+				NameA: "argA",
+				NameB: "argB",
+				Init:  child,
+				Cont: Continuation{
+					X: &exprs[i+1],
+					Holes: []*Expression{
+						&argsA[i],
+						&argsB[i],
+					},
+				},
+			}
+		}
+		res.Inits = []Expression{
+			&ConsExpr{cons.Ctor, argsA},
+			&ConsExpr{cons.Ctor, argsB},
+		}
+		return exprs[0]
 	})
 
 	/*
@@ -616,7 +655,7 @@ func main() {
 			Init:  body,
 			Cont: Continuation{
 				X: addressOf[Expression](&LetExpr{
-					Names: []string{"a", "b"},
+					Names: []string{"lamA", "lamB"},
 					Inits: []Expression{
 						&LamExpr{
 							Param: "x0",
@@ -850,8 +889,12 @@ func main() {
 
 	{
 		dupLabel := vm.FreshDupLabel()
-		runMain(Dup(dupLabel, "a", "b", Cons("Pair", Lit(1), Lit(2)), func(x, y *VarExpr) Expression {
-			return Cons("Quad", Cons("Left", x), Cons("Right", x), Cons("Left", y), Cons("Right", y))
+		runMain(Dup(dupLabel, "x0", "x1", Cons("Pair", Lit(1), Lit(2)), func(x0, x1 *VarExpr) Expression {
+			return Dup(dupLabel, "x00", "x01", x0, func(x00, x01 *VarExpr) Expression {
+				return Dup(dupLabel, "x10", "x11", x1, func(x10, x11 *VarExpr) Expression {
+					return Cons("Quad", Cons("Left", x00), Cons("Right", x01), Cons("Left", x10), Cons("Right", x11))
+				})
+			})
 		}))
 	}
 
