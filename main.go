@@ -685,38 +685,39 @@ func main() {
 			return nil
 		}
 
-		var x0 Expression = &VarExpr{"x0"}
-		var x1 Expression = &VarExpr{"x1"}
-		sup := Sup(dup.Label, x0, x1)
+		var arg0 Expression = &VarExpr{"arg0"}
+		var arg1 Expression = &VarExpr{"arg1"}
+		sup := Sup(dup.Label, arg0, arg1)
 		body := lam.Cont.FillHoles(sup)
-		var b0 Expression = &VarExpr{"b0"}
-		var b1 Expression = &VarExpr{"b1"}
+		var body0 Expression = &VarExpr{"body0"}
+		var body1 Expression = &VarExpr{"body1"}
 		return &DupExpr{
-			NameA: "b0",
-			NameB: "b1",
+			Label: dup.Label,
+			NameA: "body0",
+			NameB: "body1",
 			Init:  body,
 			Cont: Continuation{
 				X: addressOf[Expression](&LetExpr{
 					Names: []string{"lamA", "lamB"},
 					Inits: []Expression{
 						&LamExpr{
-							Param: "x0",
+							Param: "arg0",
 							Cont: Continuation{
-								X:     &b0,
+								X:     &body0,
 								Holes: []*Expression{&sup.A},
 							},
 						},
 						&LamExpr{
-							Param: "x1",
+							Param: "arg1",
 							Cont: Continuation{
-								X:     &b1,
+								X:     &body1,
 								Holes: []*Expression{&sup.B},
 							},
 						},
 					},
 					Cont: dup.Cont,
 				}),
-				Holes: []*Expression{&b0, &b1},
+				Holes: []*Expression{&body0, &body1},
 			},
 		}
 	})
@@ -951,6 +952,15 @@ func main() {
 	}
 
 	{
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
+			return Op2(Add, x, Lit(1))
+		}), func(f1, f2 *VarExpr) Expression {
+			return Cons("Pair", f1, f2)
+		}))
+	}
+
+	if false { // XXX
 		/*
 			let list = (Cons 1 (Cons 2 Nil))
 			let inc = λx (+ x 1)
