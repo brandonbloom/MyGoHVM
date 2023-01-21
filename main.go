@@ -81,7 +81,17 @@ func Let1(name string, init Expression, body func(v *VarExpr) Expression) *LetEx
 	})
 }
 
+type EraseExpr struct {
+	X Expression // TODO: Variadic.
+	K Expression
+}
+
+func Erase(x Expression, k Expression) *EraseExpr {
+	return &EraseExpr{X: x, K: k}
+}
+
 // TODO: Variadic. type DupBinding { Name string; Count int; Init Expression }
+// TODO: Represent Let and Erase as Dup count=1 and count=0 respectively?
 type DupExpr struct {
 	Label int64
 	NameA string
@@ -152,21 +162,23 @@ type Visitor interface {
 	VisitVar(*VarExpr)
 	VisitCons(*ConsExpr)
 	VisitLet(*LetExpr)
+	VisitErase(*EraseExpr)
 	VisitDup(*DupExpr)
 	VisitSup(*SupExpr)
 	VisitOp2(*Op2Expr)
 	VisitLam(*LamExpr)
 }
 
-func (x *LitExpr) Visit(v Visitor)  { v.VisitLit(x) }
-func (x *AppExpr) Visit(v Visitor)  { v.VisitApp(x) }
-func (x *VarExpr) Visit(v Visitor)  { v.VisitVar(x) }
-func (x *ConsExpr) Visit(v Visitor) { v.VisitCons(x) }
-func (x *LetExpr) Visit(v Visitor)  { v.VisitLet(x) }
-func (x *DupExpr) Visit(v Visitor)  { v.VisitDup(x) }
-func (x *SupExpr) Visit(v Visitor)  { v.VisitSup(x) }
-func (x *Op2Expr) Visit(v Visitor)  { v.VisitOp2(x) }
-func (x *LamExpr) Visit(v Visitor)  { v.VisitLam(x) }
+func (x *LitExpr) Visit(v Visitor)   { v.VisitLit(x) }
+func (x *AppExpr) Visit(v Visitor)   { v.VisitApp(x) }
+func (x *VarExpr) Visit(v Visitor)   { v.VisitVar(x) }
+func (x *ConsExpr) Visit(v Visitor)  { v.VisitCons(x) }
+func (x *LetExpr) Visit(v Visitor)   { v.VisitLet(x) }
+func (x *EraseExpr) Visit(v Visitor) { v.VisitErase(x) }
+func (x *DupExpr) Visit(v Visitor)   { v.VisitDup(x) }
+func (x *SupExpr) Visit(v Visitor)   { v.VisitSup(x) }
+func (x *Op2Expr) Visit(v Visitor)   { v.VisitOp2(x) }
+func (x *LamExpr) Visit(v Visitor)   { v.VisitLam(x) }
 
 type Continuation struct {
 	X     *Expression
@@ -263,6 +275,11 @@ func (cb *contBuilder) VisitLet(let *LetExpr) {
 		cb.visitChild(&let.Inits[i])
 	}
 	cb.visitChild(let.Cont.X)
+}
+
+func (cb *contBuilder) VisitErase(erase *EraseExpr) {
+	cb.visitChild(&erase.X)
+	cb.visitChild(&erase.K)
 }
 
 func (cb *contBuilder) VisitDup(dup *DupExpr) {
@@ -488,6 +505,14 @@ func (printer *Printer) VisitLet(let *LetExpr) {
 	printer.printf(")")
 }
 
+func (printer *Printer) VisitErase(erase *EraseExpr) {
+	printer.printf("(erase ")
+	erase.X.Visit(printer)
+	printer.printf(" ")
+	erase.K.Visit(printer)
+	printer.printf(")")
+}
+
 func (printer *Printer) VisitLit(lit *LitExpr) {
 	switch v := lit.Value.(type) {
 	case int:
@@ -527,12 +552,29 @@ func addressOf[T any](x T) *T {
 	return &x
 }
 
+func (vm *Machine) free(x Expression) {
+	if vm.Trace {
+		fmt.Println("free:")
+		DumpExpression(x)
+	}
+	// The Go garbage collector will do the actual freeing.
+}
+
 func main() {
 	vm := &Machine{}
 
 	// TODO: Avoid runtime pattern matching on builtins.
 	// Do this by encoding builtin rules as expressions with eval method.
 	// Move the matching into the factory functions.
+
+	vm.AddRule(func(vm *Machine, x Expression) Expression {
+		erase, ok := x.(*EraseExpr)
+		if !ok {
+			return nil
+		}
+		vm.free(erase.X)
+		return erase.K
+	})
 
 	// (Op2 f a b) = ...
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
@@ -895,6 +937,12 @@ func main() {
 					return Cons("Quad", Cons("Left", x00), Cons("Right", x01), Cons("Left", x10), Cons("Right", x11))
 				})
 			})
+		}))
+	}
+
+	{
+		runMain(Let1("x", Lit(1), func(x *VarExpr) Expression {
+			return Erase(x, Lit(2))
 		}))
 	}
 
