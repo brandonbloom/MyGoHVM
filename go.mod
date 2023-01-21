@@ -1,3 +1,3 @@
-module github.com/brandonbloom/myhvm
+module github.com/brandonbloom/MyGoHVm
 
 go 1.19
