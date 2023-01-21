@@ -61,14 +61,16 @@ func Let(name string, init Expression, body func(v *VarExpr) Expression) *LetExp
 
 // TODO: Variadic.
 type DupExpr struct {
+	Label int64
 	NameA string
 	NameB string
 	Init  Expression
 	Cont  Continuation
 }
 
-func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
+func Dup(label int64, nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
 	return &DupExpr{
+		Label: label,
 		NameA: nameA,
 		NameB: nameB,
 		Init:  init,
@@ -77,12 +79,13 @@ func Dup(nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expres
 }
 
 type SupExpr struct {
-	A Expression
-	B Expression
+	Label int64
+	A     Expression
+	B     Expression
 }
 
-func Sup(a, b Expression) *SupExpr {
-	return &SupExpr{a, b}
+func Sup(label int64, a, b Expression) *SupExpr {
+	return &SupExpr{label, a, b}
 }
 
 type Op2Expr struct {
@@ -264,7 +267,13 @@ func (cb *contBuilder) VisitLam(lam *LamExpr) {
 type Rule func(*Machine, Expression) Expression
 
 type Machine struct {
-	rules []Rule
+	dupCount int64
+	rules    []Rule
+}
+
+func (vm *Machine) FreshDupLabel() int64 {
+	vm.dupCount++
+	return vm.dupCount
 }
 
 func (vm *Machine) Normalize(x *Expression) (changed bool) {
@@ -328,7 +337,7 @@ rewrite:
 	panic(errors.New("out of fuel"))
 }
 
-func (vm *Machine) Fresh(name string) *VarExpr {
+func (vm *Machine) FreshVar(name string) *VarExpr {
 	return &VarExpr{
 		Name: name,
 	}
@@ -357,7 +366,7 @@ func DumpExpression(x Expression) {
 	fmt.Println()
 }
 
-func (printer *Printer) fresh(name string, x *Expression) *VarExpr {
+func (printer *Printer) freshVar(name string, x *Expression) *VarExpr {
 	v := (*x).(*VarExpr)
 	id := printer.counter
 	printer.counter++
@@ -401,10 +410,10 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
 	printer.printf("(dup ")
-	a := printer.fresh(dup.NameA, dup.Cont.Holes[0])
+	a := printer.freshVar(dup.NameA, dup.Cont.Holes[0])
 	a.Visit(printer)
 	printer.printf(" ")
-	b := printer.fresh(dup.NameB, dup.Cont.Holes[1])
+	b := printer.freshVar(dup.NameB, dup.Cont.Holes[1])
 	b.Visit(printer)
 	printer.printf(" ")
 	dup.Init.Visit(printer)
@@ -414,7 +423,7 @@ func (printer *Printer) VisitDup(dup *DupExpr) {
 }
 
 func (printer *Printer) VisitSup(sup *SupExpr) {
-	printer.printf("#sup[")
+	printer.printf("#sup[%d ", sup.Label)
 	sup.A.Visit(printer)
 	printer.printf(" ")
 	sup.B.Visit(printer)
@@ -426,7 +435,7 @@ func (printer *Printer) VisitLet(let *LetExpr) {
 	sep := ""
 	for i := range let.Names {
 		printer.printf(sep)
-		v := printer.fresh(let.Names[i], let.Cont.Holes[i])
+		v := printer.freshVar(let.Names[i], let.Cont.Holes[i])
 		v.Visit(printer)
 		printer.printf(" ")
 		let.Inits[i].Visit(printer)
@@ -450,7 +459,7 @@ func (printer *Printer) VisitLit(lit *LitExpr) {
 
 func (printer *Printer) VisitLam(lam *LamExpr) {
 	printer.printf("(lam ")
-	v := printer.fresh(lam.Param, lam.Cont.Holes[0])
+	v := printer.freshVar(lam.Param, lam.Cont.Holes[0])
 	v.Visit(printer)
 	printer.printf(" ")
 	(*lam.Cont.X).Visit(printer)
@@ -543,7 +552,7 @@ func main() {
 		argsA := make([]Expression, arity)
 		argsB := make([]Expression, arity)
 		for i, child := range cons.Args {
-			Dup("a", "b", child, func(a, b *VarExpr) Expression {
+			Dup(dup.Label, "a", "b", child, func(a, b *VarExpr) Expression {
 				argsA[i] = a
 				argsB[i] = b
 				return nil // XXX
@@ -576,7 +585,7 @@ func main() {
 
 		var x0 Expression = &VarExpr{"x0"}
 		var x1 Expression = &VarExpr{"x1"}
-		sup := Sup(x0, x1)
+		sup := Sup(dup.Label, x0, x1)
 		body := lam.Cont.FillHoles(sup)
 		var b0 Expression = &VarExpr{"b0"}
 		var b1 Expression = &VarExpr{"b1"}
@@ -629,8 +638,8 @@ func main() {
 		op := op2.Op
 		a0 := sup.A
 		a1 := sup.B
-		return Dup("b0", "b1", b, func(b0, b1 *VarExpr) Expression {
-			return Sup(Op2(op, a0, b0), Op2(op, a1, b1))
+		return Dup(sup.Label, "b0", "b1", b, func(b0, b1 *VarExpr) Expression {
+			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
 		})
 	})
 
@@ -653,8 +662,8 @@ func main() {
 		op := op2.Op
 		b0 := sup.A
 		b1 := sup.B
-		return Dup("a0", "a1", a, func(a0, a1 *VarExpr) Expression {
-			return Sup(Op2(op, a0, b0), Op2(op, a1, b1))
+		return Dup(sup.Label, "a0", "a1", a, func(a0, a1 *VarExpr) Expression {
+			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
 		})
 	})
 
@@ -686,7 +695,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		if false { // XXX end of dup process?
+		if dup.Label == sup.Label {
 			/*
 				When ending the duplication process.
 
@@ -707,10 +716,10 @@ func main() {
 					dup xA yA = a
 					dup xB yB = b
 			*/
-			return Dup("xA", "yA", sup.A, func(xA, yA *VarExpr) Expression {
-				return Dup("xB", "yB", sup.B, func(xB, yB *VarExpr) Expression {
-					x := Sup(xA, xB)
-					y := Sup(yA, yB)
+			return Dup(dup.Label, "xA", "yA", sup.A, func(xA, yA *VarExpr) Expression {
+				return Dup(dup.Label, "xB", "yB", sup.B, func(xB, yB *VarExpr) Expression {
+					x := Sup(dup.Label, xA, xB)
+					y := Sup(dup.Label, yA, yB)
 					return dup.Cont.FillHoles(x, y)
 				})
 			})
@@ -745,6 +754,7 @@ func main() {
 		return n
 	})
 	// (Map f (Cons x xs)) = (Cons (f x) (Map f xs))
+	mapDupLabel := vm.FreshDupLabel()
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
 		m, ok := x.(*ConsExpr)
 		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
@@ -755,7 +765,7 @@ func main() {
 		if !(ok && lst.Ctor == "Cons" && len(m.Args) == 2) {
 			return nil
 		}
-		return Dup("f0", "f1", f, func(f0, f1 *VarExpr) Expression {
+		return Dup(mapDupLabel, "f0", "f1", f, func(f0, f1 *VarExpr) Expression {
 			first := lst.Args[0]
 			rest := lst.Args[1]
 			return Cons("Cons", App(f0, first), Cons("Map", f1, rest))
@@ -775,8 +785,8 @@ func main() {
 	}
 
 	{
-		x := vm.Fresh("x")
-		y := vm.Fresh("y")
+		x := vm.FreshVar("x")
+		y := vm.FreshVar("y")
 		runMain(Cons("Fst", Cons("Pair", x, y)))
 	}
 
@@ -787,7 +797,8 @@ func main() {
 	}
 
 	{
-		runMain(Dup("x", "y", Lit(1), func(x, y *VarExpr) Expression {
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "x", "y", Lit(1), func(x, y *VarExpr) Expression {
 			return Op2(Add, x, y)
 		}))
 	}
