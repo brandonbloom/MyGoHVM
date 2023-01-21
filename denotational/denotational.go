@@ -230,6 +230,9 @@ func (cb *contBuilder) visitChild(x *Expression) {
 	if v, ok := cb.visited.(*VarExpr); ok {
 		for i, candidate := range cb.variables {
 			if candidate == v {
+				if cb.holes[i] != nil {
+					panic(fmt.Errorf("non-linear hole: %s", v.Name))
+				}
 				cb.holes[i] = x
 			}
 		}
