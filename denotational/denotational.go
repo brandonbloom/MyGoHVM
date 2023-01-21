@@ -188,8 +188,10 @@ func makeCont(holes []string, f func(...*VarExpr) Expression) Continuation {
 	x := f(vars...)
 	cb := newContBuilder(vars...)
 	cb.visitChild(&x)
-	for _, hole := range cb.holes {
-		_ = (*hole).(*VarExpr)
+	for i, hole := range cb.holes {
+		if hole == nil {
+			panic(fmt.Errorf("hole not found: %s", holes[i]))
+		}
 	}
 	return Continuation{
 		X:     &x,
