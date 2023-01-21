@@ -51,12 +51,34 @@ type LetExpr struct {
 	Cont  Continuation
 }
 
-func Let(name string, init Expression, body func(v *VarExpr) Expression) *LetExpr {
+func LetParallel(names []string, inits []Expression, body func(v ...*VarExpr) Expression) *LetExpr {
 	return &LetExpr{
-		Names: []string{name},
-		Inits: []Expression{init},
-		Cont:  makeLetCont(name, body),
+		Names: names,
+		Inits: inits,
+		Cont:  makeCont(names, body),
 	}
+}
+
+type Binding struct {
+	Name string
+	Init Expression
+}
+
+func Let(bindings []Binding, body func(v ...*VarExpr) Expression) *LetExpr {
+	n := len(bindings)
+	names := make([]string, n)
+	inits := make([]Expression, n)
+	for i, binding := range bindings {
+		names[i] = binding.Name
+		inits[i] = binding.Init
+	}
+	return LetParallel(names, inits, body)
+}
+
+func Let1(name string, init Expression, body func(v *VarExpr) Expression) *LetExpr {
+	return LetParallel([]string{name}, []Expression{init}, func(vars ...*VarExpr) Expression {
+		return body(vars[0])
+	})
 }
 
 // TODO: Variadic.
@@ -173,12 +195,6 @@ func makeCont(holes []string, f func(...*VarExpr) Expression) Continuation {
 		X:     &x,
 		Holes: cb.holes,
 	}
-}
-
-func makeLetCont(hole string, f func(*VarExpr) Expression) Continuation {
-	return makeCont([]string{hole}, func(vars ...*VarExpr) Expression {
-		return f(vars[0])
-	})
 }
 
 func makeLamCont(hole string, f func(*VarExpr) Expression) Continuation {
@@ -409,7 +425,7 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 }
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
-	printer.printf("(dup ")
+	printer.printf("(dup %d ", dup.Label)
 	a := printer.freshVar(dup.NameA, dup.Cont.Holes[0])
 	a.Visit(printer)
 	printer.printf(" ")
@@ -791,7 +807,7 @@ func main() {
 	}
 
 	{
-		runMain(Let("x", Lit(1), func(x *VarExpr) Expression {
+		runMain(Let1("x", Lit(1), func(x *VarExpr) Expression {
 			return x
 		}))
 	}
@@ -817,16 +833,16 @@ func main() {
 			(Map inc list)
 		*/
 		runMain(
-			Let("list",
-				Cons("Cons", Lit(1), Cons("Cons", Lit(2), Cons("Nil"))),
-				func(list *VarExpr) Expression {
-					return Let("inc",
-						Lam("x", func(x *VarExpr) Expression {
-							return Op2(Add, x, Lit(1))
-						}),
-						func(inc *VarExpr) Expression {
-							return Cons("Map", inc, list)
-						})
+			Let([]Binding{
+				{"list", Cons("Cons", Lit(1), Cons("Cons", Lit(2), Cons("Nil")))},
+				{"inc", Lam("x", func(x *VarExpr) Expression {
+					return Op2(Add, x, Lit(1))
+				})},
+			},
+				func(vars ...*VarExpr) Expression {
+					list := vars[0]
+					inc := vars[1]
+					return Cons("Map", inc, list)
 				}),
 		)
 	}
