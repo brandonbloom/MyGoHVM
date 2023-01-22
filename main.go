@@ -218,7 +218,7 @@ func makeDupCont(holeA, holeB string, f func(*VarExpr, *VarExpr) Expression) Con
 type contBuilder struct {
 	variables []*VarExpr    // Variables to find the addresses of.
 	holes     []*Expression // Found addresses of parallel found variables.
-	visited   Expression    // Current expression in post-order traversal.
+	visiting  *Expression   // Expression being visisted.
 }
 
 func newContBuilder(variables ...*VarExpr) *contBuilder {
@@ -229,18 +229,8 @@ func newContBuilder(variables ...*VarExpr) *contBuilder {
 }
 
 func (cb *contBuilder) visitChild(x *Expression) {
+	cb.visiting = x
 	(*x).Visit(cb)
-	cb.visited = *x
-	if v, ok := cb.visited.(*VarExpr); ok {
-		for i, candidate := range cb.variables {
-			if candidate == v {
-				if cb.holes[i] != nil {
-					panic(fmt.Errorf("non-linear hole: %s", v.Name))
-				}
-				cb.holes[i] = x
-			}
-		}
-	}
 }
 
 func (cb *contBuilder) VisitLit(lit *LitExpr) {
@@ -253,7 +243,14 @@ func (cb *contBuilder) VisitApp(app *AppExpr) {
 }
 
 func (cb *contBuilder) VisitVar(v *VarExpr) {
-	// No children.
+	for i, candidate := range cb.variables {
+		if candidate == v {
+			if cb.holes[i] != nil {
+				panic(fmt.Errorf("non-linear hole: %s", v.Name))
+			}
+			cb.holes[i] = cb.visiting
+		}
+	}
 }
 
 func (cb *contBuilder) VisitCons(cons *ConsExpr) {
