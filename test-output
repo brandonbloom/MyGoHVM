@@ -1,10 +1,10 @@
 Input:
 
-(Left (Pair x@14000104220 y@14000104230))
+(Left (Pair x#0 y#1))
 
 Output:
 
-x@14000104220
+x#0
 
 
 Input:

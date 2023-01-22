@@ -422,14 +422,19 @@ func DumpExpression(x Expression) {
 	fmt.Println()
 }
 
+func (printer *Printer) freshVarID(v *VarExpr) int64 {
+	id := printer.counter
+	printer.counter++
+	printer.varIDs[v] = id
+	return id
+}
+
 func (printer *Printer) freshVar(name string, x *Expression) *VarExpr {
 	v, ok := (*x).(*VarExpr)
 	if !ok {
 		panic(fmt.Errorf("got nil, expected variable: %s", name))
 	}
-	id := printer.counter
-	printer.counter++
-	printer.varIDs[v] = id
+	_ = printer.freshVarID(v)
 	return v
 }
 
@@ -438,11 +443,11 @@ func (printer *Printer) printf(format string, v ...interface{}) {
 }
 
 func (printer *Printer) VisitVar(v *VarExpr) {
-	if id, ok := printer.varIDs[v]; ok {
-		fmt.Fprintf(printer.w, "%s#%d", v.Name, id)
-	} else {
-		fmt.Fprintf(printer.w, "%s@%#p", v.Name, v)
+	id, ok := printer.varIDs[v]
+	if !ok {
+		id = printer.freshVarID(v)
 	}
+	fmt.Fprintf(printer.w, "%s#%d", v.Name, id)
 }
 
 func (printer *Printer) VisitCons(cons *ConsExpr) {
