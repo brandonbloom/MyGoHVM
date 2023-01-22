@@ -122,3 +122,21 @@ Input:
 Output:
 
 (Pair 3 4)
+
+
+Input:
+
+(Map (lam x x) Nil)
+
+Output:
+
+Nil
+
+
+Input:
+
+(let {list (Cons 1 (Cons 2 Nil)), inc (lam x (op2 Add x 1))} (Map inc list))
+
+Output:
+
+(Cons 2 (Cons 3 Nil))

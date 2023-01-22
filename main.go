@@ -858,11 +858,11 @@ func main() {
 		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
 			return nil
 		}
-		n, ok := x.(*ConsExpr)
-		if !(ok && n.Ctor == "Nil" && len(m.Args) == 0) {
+		lst, ok := m.Args[1].(*ConsExpr)
+		if !(ok && lst.Ctor == "Nil" && len(lst.Args) == 0) {
 			return nil
 		}
-		return n
+		return lst
 	})
 	// (Map f (Cons x xs)) = (Cons (f x) (Map f xs))
 	mapDupLabel := vm.FreshDupLabel()
@@ -873,7 +873,7 @@ func main() {
 		}
 		f := m.Args[0]
 		lst, ok := m.Args[1].(*ConsExpr)
-		if !(ok && lst.Ctor == "Cons" && len(m.Args) == 2) {
+		if !(ok && lst.Ctor == "Cons" && len(lst.Args) == 2) {
 			return nil
 		}
 		return Dup(mapDupLabel, "f0", "f1", f, func(f0, f1 *VarExpr) Expression {
@@ -997,7 +997,13 @@ func main() {
 		}))
 	}
 
-	if false { // XXX
+	{
+		runMain(
+			Cons("Map", Lam("x", func(x *VarExpr) Expression { return x }), Cons("Nil")),
+		)
+	}
+
+	{
 		/*
 			let list = (Cons 1 (Cons 2 Nil))
 			let inc = λx (+ x 1)
