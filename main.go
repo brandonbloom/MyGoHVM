@@ -976,6 +976,9 @@ func main() {
 		}))
 	}
 
+	// XXX this doesn't work because extracting elements of a sup breaks their association
+	// with the holes that are getting filled by the lambda. so we need to have reverse pointers
+	// to the holes & relocate them when splitting apart a sup.
 	if false {
 		// Dup and apply typical lambdas.
 		vm.Trace = true
