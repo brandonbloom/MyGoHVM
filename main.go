@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -154,6 +153,7 @@ func Lam(param string, body func(arg *VarExpr) Expression) *LamExpr {
 
 type Expression interface {
 	Visit(Visitor)
+	Reduce(*Machine) Expression
 }
 
 type Visitor interface {
@@ -301,7 +301,7 @@ type Machine struct {
 	Trace bool
 
 	dupCount int64
-	rules    []Rule
+	rules    []Rule // TODO: map[string]ReduceFunc
 }
 
 func (vm *Machine) FreshDupLabel() int64 {
@@ -316,7 +316,9 @@ func (vm *Machine) Normalize(x *Expression) (changed bool) {
 			fmt.Println("Normalizing:")
 			DumpExpression(*x)
 		}
-		loop = vm.Rewrite(x)
+		y := (*x).Reduce(vm)
+		loop = *x != y
+		*x = y
 
 		switch x := (*x).(type) {
 		case *ConsExpr:
@@ -345,7 +347,12 @@ func (vm *Machine) Normalize(x *Expression) (changed bool) {
 			loop = loop || vm.Normalize(&x.A)
 			loop = loop || vm.Normalize(&x.B)
 
-		case *VarExpr, *LitExpr, *SupExpr:
+		case *VarExpr:
+			if x.X != nil {
+				loop = loop || vm.Normalize(&x.X)
+			}
+
+		case *LitExpr, *SupExpr, *EraseExpr:
 			// No-op.
 
 		default:
@@ -359,31 +366,6 @@ func (vm *Machine) Normalize(x *Expression) (changed bool) {
 		DumpExpression(*x)
 	}
 	return
-}
-
-func (vm *Machine) Rewrite(x *Expression) (changed bool) {
-	limit := -1
-	if vm.Trace {
-		fmt.Println("Rewriting:")
-		DumpExpression(*x)
-	}
-rewrite:
-	for fuel := limit; fuel != 0; fuel-- {
-		for _, rule := range vm.rules {
-			y := rule(vm, *x)
-			if y != nil {
-				*x = y
-				changed = true
-				if vm.Trace {
-					fmt.Println("Rewritten:")
-					DumpExpression(*x)
-				}
-				continue rewrite
-			}
-		}
-		return
-	}
-	panic(errors.New("out of fuel"))
 }
 
 func (vm *Machine) AddRule(rule Rule) {
@@ -550,89 +532,88 @@ func (vm *Machine) free(x Expression) {
 	// The Go garbage collector will do the actual freeing.
 }
 
-func main() {
-	vm := &Machine{}
+func (erase *EraseExpr) Reduce(vm *Machine) Expression {
+	vm.free(erase.X)
+	return erase.K
+}
 
-	// TODO: Avoid runtime pattern matching on builtins.
-	// Do this by encoding builtin rules as expressions with eval method.
-	// Move the matching into the factory functions.
+func (v *VarExpr) Reduce(vm *Machine) Expression {
+	if v.X == nil {
+		return v
+	}
+	return v.X
+}
 
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		erase, ok := x.(*EraseExpr)
-		if !ok {
-			return nil
-		}
-		vm.free(erase.X)
-		return erase.K
-	})
-
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		v, ok := x.(*VarExpr)
-		if !ok {
-			return nil
-		}
-		if v.X == nil {
-			return nil
-		}
-		return v.X
-	})
-
+func (op2 *Op2Expr) Reduce(vm *Machine) Expression {
 	// (Op2 f a b) = ...
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		op2, ok := x.(*Op2Expr)
-		if !ok {
-			return nil
+	if a, ok := op2.A.(*LitExpr); ok {
+		if b, ok := op2.B.(*LitExpr); ok {
+			return Lit(op2.Op.Func(a.Value, b.Value))
 		}
-		a, ok := op2.A.(*LitExpr)
-		if !ok {
-			return nil
-		}
-		b, ok := op2.B.(*LitExpr)
-		if !ok {
-			return nil
-		}
-		return Lit(op2.Op.Func(a.Value, b.Value))
-	})
+	}
 
+	/*
+	  (+ {a0 a1} b)
+	  --------------------- Op2-Sup-A
+	  dup b0 b1 = b
+	  {(+ a0 b0) (+ a1 b1)}
+	*/
+	if sup, ok := op2.A.(*SupExpr); ok {
+		b := op2.B
+		op := op2.Op
+		a0 := sup.A
+		a1 := sup.B
+		return Dup(sup.Label, "b0", "b1", b, func(b0, b1 *VarExpr) Expression {
+			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
+		})
+	}
+
+	/*
+		(+ a {b0 b1})
+		--------------------- Op2-Sup-B
+		dup a0 a1 = a
+		{(+ a0 b0) (+ a1 b1)}
+	*/
+	if sup, ok := op2.B.(*SupExpr); ok {
+		a := op2.A
+		op := op2.Op
+		b0 := sup.A
+		b1 := sup.B
+		return Dup(sup.Label, "a0", "a1", a, func(a0, a1 *VarExpr) Expression {
+			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
+		})
+	}
+
+	return op2
+}
+
+func (let *LetExpr) Reduce(vm *Machine) Expression {
 	// (Let {x init, ...} body) => ...
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		let, ok := x.(*LetExpr)
-		if !ok {
-			return nil
-		}
-		return let.Cont.FillHoles(let.Inits...)
-	})
+	return let.Cont.FillHoles(let.Inits...)
+}
 
-	// (Dup a b (Lit ...) k)
-	// ---------------------
-	// (k a b ...)
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		dup, ok := x.(*DupExpr)
-		if !ok {
-			return nil
-		}
-		lit, ok := dup.Init.(*LitExpr)
-		if !ok {
-			return nil
-		}
+func (dup *DupExpr) Reduce(vm *Machine) Expression {
+
+	switch init := dup.Init.(type) {
+	case *LitExpr:
+		lit := init
+		/*
+			(Dup a b (Lit ...) k)
+			---------------------
+			(k a b ...)
+		*/
 		return dup.Cont.FillHoles(lit, lit)
-	})
 
-	// (Dup a b (Cons ctor args...) k)
-	// ----------------------------- Dup-Cons
-	// dup a0 a1 = a
-	// dup b0 b1 = b
-	// ...
-	// (k (Foo a0 b0 ...) (Foo a1 b1 ...))
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		dup, ok := x.(*DupExpr)
-		if !ok {
-			return nil
-		}
-		cons, ok := dup.Init.(*ConsExpr)
-		if !ok {
-			return nil
-		}
+	case *ConsExpr:
+		cons := init
+		/*
+			(Dup a b (Cons ctor args...) k)
+			----------------------------- Dup-Cons
+			dup a0 a1 = a
+			dup b0 b1 = b
+			...
+			(k (Foo a0 b0 ...) (Foo a1 b1 ...))
+		*/
 		arity := len(cons.Args)
 		argsA := make([]Expression, arity)
 		argsB := make([]Expression, arity)
@@ -663,28 +644,19 @@ func main() {
 			&ConsExpr{cons.Ctor, argsB},
 		}
 		return exprs[0]
-	})
 
-	/*
-		(Dup a b (Lam param body) k)
+	case *LamExpr:
+		lam := init
+		/*
+			(Dup a b (Lam param body) k)
 
-		dup a b = λx(body)
-		------------------ Dup-Lam
-		a <- λx0(b0)
-		b <- λx1(b1)
-		x <- {x0 x1}
-		dup b0 b1 = body
-	*/
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		dup, ok := x.(*DupExpr)
-		if !ok {
-			return nil
-		}
-		lam, ok := dup.Init.(*LamExpr)
-		if !ok {
-			return nil
-		}
-
+			dup a b = λx(body)
+			------------------ Dup-Lam
+			a <- λx0(b0)
+			b <- λx1(b1)
+			x <- {x0 x1}
+			dup b0 b1 = body
+		*/
 		arg0 := Var("arg0")
 		arg1 := Var("arg1")
 		sup := Sup(dup.Label, arg0, arg1)
@@ -715,84 +687,9 @@ func main() {
 				Holes: []*VarExpr{body0, body1},
 			},
 		}
-	})
 
-	/*
-	  (+ {a0 a1} b)
-	  --------------------- Op2-Sup-A
-	  dup b0 b1 = b
-	  {(+ a0 b0) (+ a1 b1)}
-	*/
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		op2, ok := x.(*Op2Expr)
-		if !ok {
-			return nil
-		}
-		sup, ok := op2.A.(*SupExpr)
-		if !ok {
-			return nil
-		}
-		b := op2.B
-		op := op2.Op
-		a0 := sup.A
-		a1 := sup.B
-		return Dup(sup.Label, "b0", "b1", b, func(b0, b1 *VarExpr) Expression {
-			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
-		})
-	})
-
-	/*
-		(+ a {b0 b1})
-		--------------------- Op2-Sup-B
-		dup a0 a1 = a
-		{(+ a0 b0) (+ a1 b1)}
-	*/
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		op2, ok := x.(*Op2Expr)
-		if !ok {
-			return nil
-		}
-		sup, ok := op2.B.(*SupExpr)
-		if !ok {
-			return nil
-		}
-		a := op2.A
-		op := op2.Op
-		b0 := sup.A
-		b1 := sup.B
-		return Dup(sup.Label, "a0", "a1", a, func(a0, a1 *VarExpr) Expression {
-			return Sup(sup.Label, Op2(op, a0, b0), Op2(op, a1, b1))
-		})
-	})
-
-	/*
-		(λx(body) arg)
-		-------------- App-Lam
-		x <- arg
-		body
-	*/
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		app, ok := x.(*AppExpr)
-		if !ok {
-			return nil
-		}
-		lam, ok := app.Func.(*LamExpr)
-		if !ok {
-			return nil
-		}
-		return lam.Cont.FillHoles(app.Arg)
-	})
-
-	// Dup-Sup.
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		dup, ok := x.(*DupExpr)
-		if !ok {
-			return nil
-		}
-		sup, ok := dup.Init.(*SupExpr)
-		if !ok {
-			return nil
-		}
+	case *SupExpr:
+		sup := init
 		if dup.Label == sup.Label {
 			/*
 				When ending the duplication process.
@@ -822,7 +719,49 @@ func main() {
 				})
 			})
 		}
-	})
+	}
+
+	return dup
+}
+
+func (app *AppExpr) Reduce(vm *Machine) Expression {
+	/*
+		(λx(body) arg)
+		-------------- App-Lam
+		x <- arg
+		body
+	*/
+	if lam, ok := app.Func.(*LamExpr); ok {
+		return lam.Cont.FillHoles(app.Arg)
+	}
+
+	return app
+}
+
+func (sup *SupExpr) Reduce(vm *Machine) Expression {
+	return sup
+}
+
+func (lit *LitExpr) Reduce(vm *Machine) Expression {
+	return lit
+}
+
+func (lam *LamExpr) Reduce(vm *Machine) Expression {
+	return lam
+}
+
+func (cons *ConsExpr) Reduce(vm *Machine) Expression {
+	for _, rule := range vm.rules {
+		redex := rule(vm, cons)
+		if redex != nil {
+			return redex
+		}
+	}
+	return cons
+}
+
+func main() {
+	vm := &Machine{}
 
 	/////////////
 
