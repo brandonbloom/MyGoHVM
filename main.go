@@ -46,14 +46,12 @@ func App(f Expression, x Expression) *AppExpr {
 }
 
 type LetExpr struct {
-	Names []string
 	Inits []Expression
 	Cont  Continuation
 }
 
 func LetParallel(names []string, inits []Expression, body func(v ...*VarExpr) Expression) *LetExpr {
 	return &LetExpr{
-		Names: names,
 		Inits: inits,
 		Cont:  makeCont(names, body),
 	}
@@ -94,8 +92,6 @@ func Erase(x Expression, k Expression) *EraseExpr {
 // TODO: Represent Let and Erase as Dup count=1 and count=0 respectively?
 type DupExpr struct {
 	Label int64
-	NameA string
-	NameB string
 	Init  Expression
 	Cont  Continuation
 }
@@ -103,8 +99,6 @@ type DupExpr struct {
 func Dup(label int64, nameA, nameB string, init Expression, f func(*VarExpr, *VarExpr) Expression) *DupExpr {
 	return &DupExpr{
 		Label: label,
-		NameA: nameA,
-		NameB: nameB,
 		Init:  init,
 		Cont:  makeDupCont(nameA, nameB, f),
 	}
@@ -141,14 +135,12 @@ func Op2(op Operator, a, b Expression) *Op2Expr {
 
 // TODO: Variadic.
 type LamExpr struct {
-	Param string
-	Cont  Continuation
+	Cont Continuation
 }
 
 func Lam(param string, body func(arg *VarExpr) Expression) *LamExpr {
 	return &LamExpr{
-		Param: param,
-		Cont:  makeLamCont(param, body),
+		Cont: makeLamCont(param, body),
 	}
 }
 
@@ -404,15 +396,17 @@ func (vm *Machine) AddRule(rule Rule) {
 }
 
 type Printer struct {
-	w       io.Writer
-	varIDs  map[*VarExpr]int64
-	counter int64
+	w              io.Writer
+	nameCounts     map[string]int   // Number of unique vars with a given name.
+	discriminators map[*VarExpr]int // Maps vars to name count at time first seen.
+	counter        int64
 }
 
 func NewPrinter(w io.Writer) *Printer {
 	return &Printer{
-		w:      w,
-		varIDs: make(map[*VarExpr]int64),
+		w:              w,
+		nameCounts:     map[string]int{},
+		discriminators: map[*VarExpr]int{},
 	}
 }
 
@@ -422,19 +416,22 @@ func DumpExpression(x Expression) {
 	fmt.Println()
 }
 
-func (printer *Printer) freshVarID(v *VarExpr) int64 {
-	id := printer.counter
-	printer.counter++
-	printer.varIDs[v] = id
-	return id
+func (printer *Printer) discriminate(v *VarExpr) int {
+	discriminator, ok := printer.discriminators[v]
+	if !ok {
+		discriminator = printer.nameCounts[v.Name]
+		printer.nameCounts[v.Name] = discriminator + 1
+		printer.discriminators[v] = discriminator
+	}
+	return discriminator
 }
 
-func (printer *Printer) freshVar(name string, x *Expression) *VarExpr {
+func (printer *Printer) holeVar(x *Expression) *VarExpr {
 	v, ok := (*x).(*VarExpr)
 	if !ok {
-		panic(fmt.Errorf("got nil, expected variable: %s", name))
+		panic(fmt.Errorf("expected *VarExpr, got %T", x))
 	}
-	_ = printer.freshVarID(v)
+	_ = printer.discriminate(v)
 	return v
 }
 
@@ -443,11 +440,12 @@ func (printer *Printer) printf(format string, v ...interface{}) {
 }
 
 func (printer *Printer) VisitVar(v *VarExpr) {
-	id, ok := printer.varIDs[v]
-	if !ok {
-		id = printer.freshVarID(v)
+	discriminator := printer.discriminate(v)
+	if discriminator == 0 {
+		printer.printf("%s", v.Name)
+	} else {
+		printer.printf("%s#%d", v.Name, discriminator)
 	}
-	fmt.Fprintf(printer.w, "%s#%d", v.Name, id)
 }
 
 func (printer *Printer) VisitCons(cons *ConsExpr) {
@@ -474,10 +472,10 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
 	printer.printf("#dup[%d ", dup.Label)
-	a := printer.freshVar(dup.NameA, dup.Cont.Holes[0])
+	a := printer.holeVar(dup.Cont.Holes[0])
 	a.Visit(printer)
 	printer.printf(" ")
-	b := printer.freshVar(dup.NameB, dup.Cont.Holes[1])
+	b := printer.holeVar(dup.Cont.Holes[1])
 	b.Visit(printer)
 	printer.printf(" ")
 	dup.Init.Visit(printer)
@@ -497,9 +495,9 @@ func (printer *Printer) VisitSup(sup *SupExpr) {
 func (printer *Printer) VisitLet(let *LetExpr) {
 	printer.printf("(let {")
 	sep := ""
-	for i := range let.Names {
+	for i, hole := range let.Cont.Holes {
 		printer.printf(sep)
-		v := printer.freshVar(let.Names[i], let.Cont.Holes[i])
+		v := printer.holeVar(hole)
 		v.Visit(printer)
 		printer.printf(" ")
 		let.Inits[i].Visit(printer)
@@ -531,7 +529,7 @@ func (printer *Printer) VisitLit(lit *LitExpr) {
 
 func (printer *Printer) VisitLam(lam *LamExpr) {
 	printer.printf("(lam ")
-	v := printer.freshVar(lam.Param, lam.Cont.Holes[0])
+	v := printer.holeVar(lam.Cont.Holes[0])
 	v.Visit(printer)
 	printer.printf(" ")
 	(*lam.Cont.X).Visit(printer)
@@ -658,8 +656,7 @@ func main() {
 		argsB := make([]Expression, arity)
 		exprs := make([]Expression, arity+1)
 		res := &LetExpr{
-			Names: []string{"consA", "consB"},
-			Cont:  dup.Cont,
+			Cont: dup.Cont,
 		}
 		exprs[arity] = res
 		for i, child := range cons.Args {
@@ -667,8 +664,6 @@ func main() {
 			argsB[i] = &VarExpr{Name: "argB"}
 			exprs[i] = &DupExpr{
 				Label: dup.Label,
-				NameA: "argA",
-				NameB: "argB",
 				Init:  child,
 				Cont: Continuation{
 					X: &exprs[i+1],
@@ -714,22 +709,17 @@ func main() {
 		var body1 Expression = &VarExpr{"body1"}
 		return &DupExpr{
 			Label: dup.Label,
-			NameA: "body0",
-			NameB: "body1",
 			Init:  body,
 			Cont: Continuation{
 				X: addressOf[Expression](&LetExpr{
-					Names: []string{"lamA", "lamB"},
 					Inits: []Expression{
 						&LamExpr{
-							Param: "arg0",
 							Cont: Continuation{
 								X:     &body0,
 								Holes: []*Expression{&sup.A},
 							},
 						},
 						&LamExpr{
-							Param: "arg1",
 							Cont: Continuation{
 								X:     &body1,
 								Holes: []*Expression{&sup.B},
@@ -953,6 +943,15 @@ func main() {
 
 	{
 		runMain(Cons("Pair", Lit(1), Lit(2)))
+	}
+
+	{
+		// Shadowing.
+		runMain(Let1("x", Lit(1), func(x *VarExpr) Expression {
+			return Erase(x, Let1("x", Lit(2), func(x *VarExpr) Expression {
+				return x
+			}))
+		}))
 	}
 
 	{
