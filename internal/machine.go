@@ -1,21 +1,25 @@
 package internal
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 // Returns nil if the rule does not match.
-type Rule func(*Machine, Expression) Expression
+type Rule func(*Machine, *ConsExpr) Expression
 
 type Machine struct {
 	Trace bool
 
 	dupCount int64
-	rules    []Rule           // TODO: map[string]ReduceFunc or map[string][arity: int]ReduceFunc.
+	rules    map[string]Rule  // TODO: Further optimize dispatch by arity.
 	todo     map[Frame]*Frame // References interned by value.
 }
 
 func NewMachine() *Machine {
 	return &Machine{
-		todo: make(map[Frame]*Frame),
+		rules: make(map[string]Rule),
+		todo:  make(map[Frame]*Frame),
 	}
 }
 
@@ -94,8 +98,11 @@ func (vm *Machine) dequeue() *Frame {
 	return nil
 }
 
-func (vm *Machine) AddRule(rule Rule) {
-	vm.rules = append(vm.rules, rule)
+func (vm *Machine) AddRule(ctor string, rule Rule) {
+	if _, exists := vm.rules[ctor]; exists {
+		fmt.Fprintf(os.Stderr, "warning: overriding %s rule\n", ctor)
+	}
+	vm.rules[ctor] = rule
 }
 
 func (vm *Machine) free(x Expression) {

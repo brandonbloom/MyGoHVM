@@ -219,9 +219,8 @@ func (lam *LamExpr) Reduce(vm *Machine) Expression {
 }
 
 func (cons *ConsExpr) Reduce(vm *Machine) Expression {
-	for _, rule := range vm.rules {
-		redex := rule(vm, cons)
-		if redex != nil {
+	if rule := vm.rules[cons.Ctor]; rule != nil {
+		if redex := rule(vm, cons); redex != nil {
 			return redex
 		}
 	}

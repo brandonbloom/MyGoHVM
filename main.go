@@ -11,58 +11,47 @@ func main() {
 	//vm.Trace = true
 
 	// (Left (Pair x y)) = x
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		f, ok := x.(*ConsExpr)
-		if !(ok && f.Ctor == "Left" && len(f.Args) == 1) {
+	vm.AddRule("Left", func(vm *Machine, cons *ConsExpr) Expression {
+		if len(cons.Args) != 1 {
 			return nil
 		}
-		pair, ok := f.Args[0].(*ConsExpr)
-		if !(ok && len(pair.Args) == 2) {
+		left, _, ok := MatchPair(cons.Args[0])
+		if !ok {
 			return nil
 		}
-		return pair.Args[0]
+		return left
 	})
 
 	// (Right (Pair x y)) = y
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		f, ok := x.(*ConsExpr)
-		if !(ok && f.Ctor == "Right" && len(f.Args) == 1) {
+	vm.AddRule("Right", func(vm *Machine, cons *ConsExpr) Expression {
+		if len(cons.Args) != 1 {
 			return nil
 		}
-		pair, ok := f.Args[0].(*ConsExpr)
-		if !(ok && len(pair.Args) == 2) {
+		_, right, ok := MatchPair(cons.Args[0])
+		if !ok {
 			return nil
 		}
-		return pair.Args[1]
+		return right
 	})
 
 	// (Map f Nil) = Nil
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		m, ok := x.(*ConsExpr)
-		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
-			return nil
-		}
-		lst, ok := m.Args[1].(*ConsExpr)
-		if !(ok && lst.Ctor == "Nil" && len(lst.Args) == 0) {
-			return nil
-		}
-		return lst
-	})
 	// (Map f (Cons x xs)) = (Cons (f x) (Map f xs))
 	mapDupLabel := vm.FreshDupLabel()
-	vm.AddRule(func(vm *Machine, x Expression) Expression {
-		m, ok := x.(*ConsExpr)
-		if !(ok && m.Ctor == "Map" && len(m.Args) == 2) {
+	vm.AddRule("Map", func(vm *Machine, m *ConsExpr) Expression {
+		if len(m.Args) != 2 {
 			return nil
+		}
+		lst, ok := m.Args[1].(*ConsExpr)
+		if !ok {
+			return nil
+		}
+		if IsNil(lst) {
+			return lst
 		}
 		f := m.Args[0]
-		lst, ok := m.Args[1].(*ConsExpr)
-		if !(ok && lst.Ctor == "Cons" && len(lst.Args) == 2) {
-			return nil
-		}
+		first := lst.Args[0]
+		rest := lst.Args[1]
 		return Dup(mapDupLabel, "f0", "f1", f, func(f0, f1 *VarExpr) Expression {
-			first := lst.Args[0]
-			rest := lst.Args[1]
 			return Cons("Cons", App(f0, first), Cons("Map", f1, rest))
 		})
 	})
