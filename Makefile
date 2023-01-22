@@ -1,4 +1,4 @@
 .PHONY: test-output
 
 test-output:
-	go run . > $@
+	-go run . > $@ 2>&1

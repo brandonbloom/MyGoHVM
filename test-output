@@ -85,7 +85,7 @@ Input:
 
 Output:
 
-#dup[4 body0 body1 (op2 Add #sup[4 arg0 arg1] 1) (Pair (lam arg0 body0) (lam arg1 body1))]
+(Pair (lam arg0 (op2 Add arg0 1)) (lam arg1 (op2 Add arg1 1)))
 
 
 Input:
@@ -113,3 +113,12 @@ Input:
 Output:
 
 (Pair 1 2)
+
+
+Input:
+
+#dup[8 f1 f2 (lam x (op2 Add x 1)) (Pair (f1 2) (f2 3))]
+
+Output:
+
+(Pair 3 4)
