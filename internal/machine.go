@@ -9,7 +9,19 @@ type Machine struct {
 	Trace bool
 
 	dupCount int64
-	rules    []Rule // TODO: map[string]ReduceFunc
+	rules    []Rule           // TODO: map[string]ReduceFunc or map[string][arity: int]ReduceFunc.
+	todo     map[Frame]*Frame // References interned by value.
+}
+
+func NewMachine() *Machine {
+	return &Machine{
+		todo: make(map[Frame]*Frame),
+	}
+}
+
+type Frame struct {
+	Parent *Frame
+	X      *Expression
 }
 
 func (vm *Machine) FreshDupLabel() int64 {
@@ -17,64 +29,69 @@ func (vm *Machine) FreshDupLabel() int64 {
 	return vm.dupCount
 }
 
-// TODO: Integrate with Reduce; utilize parallism; avoid Go's stack.
-func (vm *Machine) Normalize(x *Expression) (changed bool) {
-	loop := true
-	for loop {
+func (vm *Machine) Normalize(x Expression) Expression {
+	frame := vm.enqueueChild(nil, &x)
+	vm.run()
+	return *frame.X
+}
+
+func (vm *Machine) run() {
+	for {
+		frame := vm.dequeue()
+		if frame == nil {
+			break
+		}
+		x := *frame.X
 		if vm.Trace {
-			fmt.Println("Normalizing:")
-			DumpExpression(*x)
+			fmt.Println("reducing:")
+			DumpExpression(x)
 		}
-		y := (*x).Reduce(vm)
-		loop = *x != y
-		*x = y
-
-		switch x := (*x).(type) {
-		case *ConsExpr:
-			for i := range x.Args {
-				loop = loop || vm.Normalize(&x.Args[i])
-			}
-
-		case *LetExpr:
-			for i := range x.Inits {
-				loop = loop || vm.Normalize(&x.Inits[i])
-			}
-			loop = loop || vm.Normalize(&x.Cont.X)
-
-		case *DupExpr:
-			loop = loop || vm.Normalize(&x.Init)
-			loop = loop || vm.Normalize(&x.Cont.X)
-
-		case *AppExpr:
-			loop = loop || vm.Normalize(&x.Func)
-			loop = loop || vm.Normalize(&x.Arg)
-
-		case *LamExpr:
-			loop = loop || vm.Normalize(&x.Cont.X)
-
-		case *Op2Expr:
-			loop = loop || vm.Normalize(&x.A)
-			loop = loop || vm.Normalize(&x.B)
-
-		case *VarExpr:
-			if x.X != nil {
-				loop = loop || vm.Normalize(&x.X)
-			}
-
-		case *LitExpr, *SupExpr, *EraseExpr:
-			// No-op.
-
-		default:
-			panic(fmt.Errorf("cannot normalize %T", x))
+		y := x.Reduce(vm)
+		if vm.Trace {
+			fmt.Println("reduced:")
+			DumpExpression(y)
 		}
+		if x != y {
+			*frame.X = y
+			vm.enqueueFrame(frame)
+			if frame.Parent != nil {
+				vm.enqueueFrame(frame.Parent)
+			}
+		}
+		y.TraverseChildren(func(child *Expression) {
+			vm.enqueueChild(frame, child)
+		})
+	}
+}
 
-		changed = changed || loop
+func (vm *Machine) enqueueFrame(frame *Frame) {
+	key := *frame
+	vm.todo[key] = frame
+}
+
+func (vm *Machine) enqueueChild(parent *Frame, x *Expression) *Frame {
+	key := Frame{
+		Parent: parent,
+		X:      x,
+	}
+	frame, exists := vm.todo[key]
+	if !exists {
+		frame = &key
+		vm.todo[key] = frame
 	}
 	if vm.Trace {
-		fmt.Println("Normalized:")
-		DumpExpression(*x)
+		fmt.Printf("enqueue %p with parent=%p expression:\n", frame, frame.Parent)
+		DumpExpression(*frame.X)
 	}
-	return
+	return frame
+}
+
+func (vm *Machine) dequeue() *Frame {
+	for key, frame := range vm.todo {
+		delete(vm.todo, key)
+		return frame
+	}
+	return nil
 }
 
 func (vm *Machine) AddRule(rule Rule) {

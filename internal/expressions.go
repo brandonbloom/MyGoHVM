@@ -4,6 +4,7 @@ type Value any
 
 type Expression interface {
 	Visit(Visitor)
+	TraverseChildren(func(*Expression))
 	Reduce(*Machine) Expression
 }
 

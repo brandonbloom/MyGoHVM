@@ -7,7 +7,8 @@ import (
 )
 
 func main() {
-	vm := &Machine{}
+	vm := NewMachine()
+	//vm.Trace = true
 
 	// (Left (Pair x y)) = x
 	vm.AddRule(func(vm *Machine, x Expression) Expression {
@@ -75,9 +76,9 @@ func main() {
 		fmt.Print("Input:\n\n")
 		DumpExpression(x)
 		fmt.Print("\n")
-		_ = vm.Normalize(&x)
+		y := vm.Normalize(x)
 		fmt.Printf("Output:\n\n")
-		DumpExpression(x)
+		DumpExpression(y)
 	}
 
 	{
