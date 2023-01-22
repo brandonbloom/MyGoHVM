@@ -473,7 +473,7 @@ func (printer *Printer) VisitApp(app *AppExpr) {
 }
 
 func (printer *Printer) VisitDup(dup *DupExpr) {
-	printer.printf("(dup %d ", dup.Label)
+	printer.printf("#dup[%d ", dup.Label)
 	a := printer.freshVar(dup.NameA, dup.Cont.Holes[0])
 	a.Visit(printer)
 	printer.printf(" ")
@@ -483,7 +483,7 @@ func (printer *Printer) VisitDup(dup *DupExpr) {
 	dup.Init.Visit(printer)
 	printer.printf(" ")
 	(*dup.Cont.X).Visit(printer)
-	printer.printf(")")
+	printer.printf("]")
 }
 
 func (printer *Printer) VisitSup(sup *SupExpr) {
@@ -563,6 +563,22 @@ func (vm *Machine) free(x Expression) {
 		DumpExpression(x)
 	}
 	// The Go garbage collector will do the actual freeing.
+}
+
+func matchBoundSup(x Expression) (sup *SupExpr, ok bool) {
+	var isSup bool
+	sup, isSup = x.(*SupExpr)
+	if !isSup {
+		return
+	}
+	if _, aIsVar := sup.A.(*VarExpr); aIsVar {
+		return
+	}
+	if _, bIsVar := sup.B.(*VarExpr); bIsVar {
+		return
+	}
+	ok = true
+	return
 }
 
 func main() {
@@ -738,7 +754,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		sup, ok := op2.A.(*SupExpr)
+		sup, ok := matchBoundSup(op2.A)
 		if !ok {
 			return nil
 		}
@@ -762,7 +778,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		sup, ok := op2.B.(*SupExpr)
+		sup, ok := matchBoundSup(op2.B)
 		if !ok {
 			return nil
 		}
@@ -799,7 +815,7 @@ func main() {
 		if !ok {
 			return nil
 		}
-		sup, ok := dup.Init.(*SupExpr)
+		sup, ok := matchBoundSup(dup.Init)
 		if !ok {
 			return nil
 		}
@@ -976,12 +992,24 @@ func main() {
 		}))
 	}
 
+	{
+		dupLabel := vm.FreshDupLabel()
+		runMain(Sup(dupLabel, Lit(1), Lit(2)))
+	}
+
+	{
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "a", "b", Sup(dupLabel, Lit(1), Lit(2)), func(a, b *VarExpr) Expression {
+			return Cons("Pair", a, b)
+		}))
+	}
+
 	// XXX this doesn't work because extracting elements of a sup breaks their association
 	// with the holes that are getting filled by the lambda. so we need to have reverse pointers
 	// to the holes & relocate them when splitting apart a sup.
 	if false {
-		// Dup and apply typical lambdas.
 		vm.Trace = true
+		// Dup and apply typical lambdas.
 		dupLabel := vm.FreshDupLabel()
 		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
 			return Op2(Add, x, Lit(1))
@@ -1010,4 +1038,6 @@ func main() {
 				}),
 		)
 	}
+
+	// TODO: User-level operators to collapse sups.
 }
