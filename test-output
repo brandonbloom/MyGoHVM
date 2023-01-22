@@ -1,0 +1,88 @@
+Input:
+
+(Left (Pair x@14000104220 y@14000104230))
+
+Output:
+
+x@14000104220
+
+
+Input:
+
+(let {x#0 1} x#0)
+
+Output:
+
+1
+
+
+Input:
+
+(op2 Add 2 3)
+
+Output:
+
+5
+
+
+Input:
+
+(dup 2 x#0 y#1 1 (op2 Add x#0 y#1))
+
+Output:
+
+2
+
+
+Input:
+
+((lam x#0 x#0) 1)
+
+Output:
+
+1
+
+
+Input:
+
+(Pair 1 2)
+
+Output:
+
+(Pair 1 2)
+
+
+Input:
+
+(dup 3 x0#0 x1#1 (Pair 1 2) (dup 3 x00#2 x01#3 x0#0 (dup 3 x10#4 x11#5 x1#1 (Quad (Left x00#2) (Right x01#3) (Left x10#4) (Right x11#5)))))
+
+Output:
+
+(Quad 1 2 1 2)
+
+
+Input:
+
+(let {x#0 1} (erase x#0 2))
+
+Output:
+
+2
+
+
+Input:
+
+(dup 4 f1#0 f2#1 (lam x#2 (op2 Add x#2 1)) (Pair f1#0 f2#1))
+
+Output:
+
+(Pair (lam arg0#0 (op2 Add arg0#0 1)) (lam arg1#1 (op2 Add arg1#1 1)))
+
+
+Input:
+
+(dup 5 f1#0 f2#1 (lam x#2 (erase x#2 1)) (Pair (f1#0 2) (f2#1 3)))
+
+Output:
+
+(Pair 1 1)

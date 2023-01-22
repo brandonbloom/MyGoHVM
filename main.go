@@ -382,7 +382,7 @@ rewrite:
 				*x = y
 				changed = true
 				if vm.Trace {
-					fmt.Println("Rewriten:")
+					fmt.Println("Rewritten:")
 					DumpExpression(*x)
 				}
 				continue rewrite
@@ -966,6 +966,17 @@ func main() {
 		dupLabel := vm.FreshDupLabel()
 		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
 			return Erase(x, Lit(1))
+		}), func(f1, f2 *VarExpr) Expression {
+			return Cons("Pair", App(f1, Lit(2)), App(f2, Lit(3)))
+		}))
+	}
+
+	if false {
+		// Dup and apply typical lambdas.
+		vm.Trace = true
+		dupLabel := vm.FreshDupLabel()
+		runMain(Dup(dupLabel, "f1", "f2", Lam("x", func(x *VarExpr) Expression {
+			return Op2(Add, x, Lit(1))
 		}), func(f1, f2 *VarExpr) Expression {
 			return Cons("Pair", App(f1, Lit(2)), App(f2, Lit(3)))
 		}))
