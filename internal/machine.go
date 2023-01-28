@@ -3,6 +3,8 @@ package internal
 import (
 	"fmt"
 	"os"
+	"sync"
+	"sync/atomic"
 )
 
 // Returns nil if the rule does not match.
@@ -12,20 +14,13 @@ type Machine struct {
 	Trace bool
 
 	dupCount int64
-	rules    map[string]Rule  // TODO: Further optimize dispatch by arity.
-	todo     map[Frame]*Frame // References interned by value.
+	rules    map[string]Rule // TODO: Further optimize dispatch by arity.
 }
 
 func NewMachine() *Machine {
 	return &Machine{
 		rules: make(map[string]Rule),
-		todo:  make(map[Frame]*Frame),
 	}
-}
-
-type Frame struct {
-	Parent *Frame
-	X      *Expression
 }
 
 func (vm *Machine) FreshDupLabel() int64 {
@@ -34,68 +29,38 @@ func (vm *Machine) FreshDupLabel() int64 {
 }
 
 func (vm *Machine) Normalize(x Expression) Expression {
-	frame := vm.enqueueChild(nil, &x)
-	vm.run()
-	return *frame.X
+	_ = vm.normalize(&x)
+	return x
 }
 
-func (vm *Machine) run() {
+func (vm *Machine) normalize(e *Expression) (changed bool) {
+	x := *e
 	for {
-		frame := vm.dequeue()
-		if frame == nil {
-			break
-		}
-		x := *frame.X
-		if vm.Trace {
-			fmt.Println("reducing:")
-			DumpExpression(x)
-		}
 		y := x.Reduce(vm)
-		if vm.Trace {
-			fmt.Println("reduced:")
-			DumpExpression(y)
-		}
 		if x != y {
-			*frame.X = y
-			vm.enqueueFrame(frame)
-			if frame.Parent != nil {
-				vm.enqueueFrame(frame.Parent)
-			}
+			x = y
+			changed = true
+			continue
 		}
-		y.TraverseChildren(func(child *Expression) {
-			vm.enqueueChild(frame, child)
+		var childrenChanged atomic.Bool
+		var wg sync.WaitGroup
+		x.TraverseChildren(func(child *Expression) {
+			wg.Add(1)
+			go func() {
+				if childChanged := vm.normalize(child); childChanged {
+					childrenChanged.Store(true)
+				}
+				wg.Done()
+			}()
 		})
+		wg.Wait()
+		if childrenChanged.Load() {
+			changed = true
+		} else {
+			*e = x
+			return changed
+		}
 	}
-}
-
-func (vm *Machine) enqueueFrame(frame *Frame) {
-	key := *frame
-	vm.todo[key] = frame
-}
-
-func (vm *Machine) enqueueChild(parent *Frame, x *Expression) *Frame {
-	key := Frame{
-		Parent: parent,
-		X:      x,
-	}
-	frame, exists := vm.todo[key]
-	if !exists {
-		frame = &key
-		vm.todo[key] = frame
-	}
-	if vm.Trace {
-		fmt.Printf("enqueue %p with parent=%p expression:\n", frame, frame.Parent)
-		DumpExpression(*frame.X)
-	}
-	return frame
-}
-
-func (vm *Machine) dequeue() *Frame {
-	for key, frame := range vm.todo {
-		delete(vm.todo, key)
-		return frame
-	}
-	return nil
 }
 
 func (vm *Machine) AddRule(ctor string, rule Rule) {
