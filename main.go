@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	. "github.com/brandonbloom/MyGoHVm/internal"
 )
@@ -48,6 +49,9 @@ func main() {
 		if IsNil(lst) {
 			return lst
 		}
+		if len(lst.Args) != 2 {
+			return nil
+		}
 		f := m.Args[0]
 		first := lst.Args[0]
 		rest := lst.Args[1]
@@ -56,18 +60,58 @@ func main() {
 		})
 	})
 
+	// (Range n) = (Range 0 n)
+	// (Range n n) = Nil
+	// (Range i n) = (Cons i (Range (Inc i) n))
+	vm.AddRule("Range", func(vm *Machine, rng *ConsExpr) Expression {
+		switch len(rng.Args) {
+		case 1:
+			n := rng.Args[0]
+			return Cons("Range", Lit(0), n)
+		case 2:
+			iExpr, iOK := rng.Args[0].(*LitExpr)
+			nExpr, nOK := rng.Args[1].(*LitExpr)
+			if !(iOK && nOK) {
+				return nil
+			}
+			i, iOK := iExpr.Value.(int)
+			n, nOK := nExpr.Value.(int)
+			if !(iOK && nOK) {
+				return nil
+			}
+			if i == n {
+				return Cons("Nil")
+			}
+			return Cons("Cons", Lit(i), Cons("Range", Lit(i+1), Lit(n)))
+		default:
+			return nil
+		}
+	})
 	//////////////
+
+	print := true
+	timed := true
 
 	sep := ""
 	runMain := func(x Expression) {
+		time0 := time.Now()
 		fmt.Print(sep)
 		sep = "\n\n"
-		fmt.Print("Input:\n\n")
-		DumpExpression(x)
-		fmt.Print("\n")
+		if print {
+			fmt.Print("Input:\n\n")
+			DumpExpression(x)
+			fmt.Print("\n")
+		}
 		y := vm.Normalize(x)
-		fmt.Printf("Output:\n\n")
-		DumpExpression(y)
+		if print {
+			fmt.Printf("Output:\n\n")
+			DumpExpression(y)
+		}
+		time1 := time.Now()
+		if timed {
+			duration := time1.Sub(time0)
+			fmt.Println(duration)
+		}
 	}
 
 	{
@@ -194,6 +238,20 @@ func main() {
 					inc := vars[1]
 					return Cons("Map", inc, list)
 				}),
+		)
+	}
+
+	{
+		/*
+			(Map (Lam x (Mul x 10)) (Range 10))
+		*/
+		runMain(
+			Cons("Map",
+				Lam("x", func(x *VarExpr) Expression {
+					return Op2(Mul, x, Lit(10))
+				}),
+				Cons("Range", Lit(10)),
+			),
 		)
 	}
 

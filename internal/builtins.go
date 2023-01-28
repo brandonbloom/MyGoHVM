@@ -7,6 +7,13 @@ var Add = Operator{
 	},
 }
 
+var Mul = Operator{
+	Name: "Mul",
+	Func: func(a, b Value) Value {
+		return a.(int) * b.(int)
+	},
+}
+
 func IsNil(x Expression) bool {
 	cons, ok := x.(*ConsExpr)
 	return ok && cons.Ctor == "Nil" && len(cons.Args) == 0
